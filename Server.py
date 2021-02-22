@@ -1,6 +1,9 @@
 import socket
 import threading
 
+HOST = 'localhost'
+PORT = 56789
+
 
 def manage_client(conn, iden):
     username = conn.recv(1024).decode('utf-8')
@@ -25,6 +28,8 @@ def manage_client(conn, iden):
                                     )
                 del users[iden]
                 break
+            except BlockingIOError:
+                pass
 
 
 def disseminate_message(origin, message, prefix_username=True):
@@ -37,20 +42,35 @@ def disseminate_message(origin, message, prefix_username=True):
             data['connection'].sendall(to_send)
 
 
-HOST = 'localhost'
-PORT = 56789
+def accept_connections():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((HOST, PORT))
+        s.setblocking(False)
+        s.listen()
+        while running:
+            try:
+                connection, address = s.accept()
+            except BlockingIOError:
+                continue
+            identity = f'{address[0]}:{address[1]}'
+            print(f'Recieved connection from {identity}')
+            client_thread = threading.Thread(target=manage_client, args=(connection, identity), daemon=True)
+            users[identity] = {'connection': connection, 'thread': client_thread, 'ready': False}
+            threads.append(client_thread)
+            client_thread.start()
+
 
 users = {}
 threads = []
+running = True
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.bind((HOST, PORT))
-    s.listen()
-    while True:
-        connection, address = s.accept()
-        identity = f'{address[0]}:{address[1]}'
-        print(f'Recieved connection from {identity}')
-        client_thread = threading.Thread(target=manage_client, args=(connection, identity), daemon=True)
-        users[identity] = {'connection': connection, 'thread': client_thread, 'ready': False}
-        threads.append(client_thread)
-        client_thread.start()
+accepting_thread = threading.Thread(target=accept_connections)
+threads.append(accepting_thread)
+accepting_thread.start()
+
+while running:
+    command = input()
+    if command == 'exit':
+        running = False
+
+accepting_thread.join()

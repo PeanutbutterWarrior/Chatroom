@@ -2,23 +2,30 @@ import socket
 import threading
 
 
-def manage_client(conn, addr):
+def manage_client(conn, iden):
     with conn:
         while True:
             try:
                 data = conn.recv(1024)
                 if not data:
                     break
-                print(f'Received {data} from {addr[0]}:{addr[1]}')
+                print(f'Received {data} from {iden}')
+                disseminate_message(iden, data)
             except ConnectionResetError:
-                print(f'{addr[0]}:{addr[1]} disconnected')
+                print(f'{iden} disconnected')
                 break
+
+
+def disseminate_message(origin, message):
+    for conn, iden in users:
+        if iden != origin:
+            conn.sendall(message)
 
 
 HOST = 'localhost'
 PORT = 56789
 
-users = {}
+users = []
 threads = []
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -26,7 +33,9 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.listen()
     while True:
         connection, address = s.accept()
-        print(f'Recieved connection from {address[0]}:{address[1]}')
-        client_thread = threading.Thread(target=manage_client, args=(connection, address), daemon=True)
+        identity = f'{address[0]}:{address[1]}'
+        print(f'Recieved connection from {identity}')
+        users.append((connection, identity))
+        client_thread = threading.Thread(target=manage_client, args=(connection, identity), daemon=True)
         threads.append(client_thread)
         client_thread.start()

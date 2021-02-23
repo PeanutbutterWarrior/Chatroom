@@ -45,6 +45,7 @@ def manage_client(conn, identity):
                         users[identity]['logged_in'] = True
                         users[identity]['ready'] = True
                         users[identity]['username'] = data['username']
+                        print(f'{identity} logged in as {data["username"]}')
                         disseminate_message(identity, {'action': 'connection',
                                                        'user': users[identity]['username']})
 
@@ -53,10 +54,12 @@ def manage_client(conn, identity):
                         conn.sendall(json.dumps({'ok': False, 'reason': 1}).encode('utf-8'))
                     else:
                         conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
+                        print(f'{identity} registers as {data["username"]}')
                         logins[data['username']] = data['password']
 
                 elif data['action'] == 'listen':
                     users[identity]['ready'] = True
+                    print(f'{identity} is now listening')
 
                 else:
                     print(f'! Bad action {data} from {identity}')

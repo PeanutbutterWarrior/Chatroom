@@ -13,13 +13,17 @@ def manage_client(conn, identity):
         while True:
             try:
                 data = conn.recv(1024)
+                if not data:
+                    raise ConnectionResetError
             except ConnectionResetError:
                 if users[identity]['logged_in']:
-                    print(f'{identity} disconnected')
+                    print(f'{users[identity]["username"]} disconnected')
                     disseminate_message(identity, {'action': 'disconnection',
                                                    'user': users[identity]['username']})
                     del users[identity]
                     break
+                print(f'{identity} disconnected')
+                break
             except BlockingIOError:
                 pass
             else:
@@ -63,7 +67,6 @@ def manage_client(conn, identity):
 
                 else:
                     print(f'! Bad action {data} from {identity}')
-    del users[identity]
     threads.remove(threading.current_thread())
 
 

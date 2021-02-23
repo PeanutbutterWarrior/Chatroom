@@ -56,7 +56,8 @@ def get_password(new_user):
 
 
 HOST = '192.168.2.11'
-PORT = 56789
+HOST = 'localhost'
+PORT = 26951
 
 
 new_user = True if input('Do you have an account (y/n)? ') == 'n' else False
@@ -96,6 +97,8 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     while True:
         try:
             received = s.recv(1024)
+            if not received:
+                raise ConnectionResetError
         except ConnectionResetError:
             print('Connection closed by server')
             break

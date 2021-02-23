@@ -4,8 +4,7 @@ import json
 import csv
 
 HOST = '0.0.0.0'
-PORT = 56789
-AUTHENTICATION_PORT = 56788
+PORT = 26951
 
 
 def manage_client(conn, identity):
@@ -15,7 +14,9 @@ def manage_client(conn, identity):
                 data = conn.recv(1024)
                 if not data:
                     raise ConnectionResetError
-            except ConnectionResetError:
+            except BlockingIOError:
+                pass
+            except (ConnectionResetError, OSError):
                 if users[identity]['logged_in']:
                     print(f'{users[identity]["username"]} disconnected')
                     disseminate_message(identity, {'action': 'disconnection',
@@ -24,8 +25,6 @@ def manage_client(conn, identity):
                     break
                 print(f'{identity} disconnected')
                 break
-            except BlockingIOError:
-                pass
             else:
                 if not data:
                     break

@@ -1,6 +1,7 @@
 import socket
 import threading
 import json
+import Commands
 
 HOST = 'localhost'
 PORT = 56789
@@ -86,18 +87,26 @@ def accept_connections():
             client_thread.start()
 
 
-users = {}
-logins = {}
-threads = []
-running = True
+if __name__ == '__main__':
+    users = {}
+    logins = {}
+    threads = []
+    running = True
 
-accepting_thread = threading.Thread(target=accept_connections)
-threads.append(accepting_thread)
-accepting_thread.start()
+    accepting_thread = threading.Thread(target=accept_connections)
+    threads.append(accepting_thread)
+    accepting_thread.start()
 
-while running:
-    command = input()
-    if command == 'exit':
-        running = False
+    while running:
+        command, *args = input().split()
+        if command == 'exit':
+            running = False
+        else:
+            try:
+                Commands.dispatch[command](users, *args)
+            except KeyError:
+                print('Unknown command')
+            except TypeError:
+                print('Bad arguments for command')
 
-accepting_thread.join()
+    accepting_thread.join()

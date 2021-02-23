@@ -2,17 +2,11 @@ import socket
 import threading
 import json
 import hashlib
+import PySimpleGUI as sg
 
 
 # Characters allowed in usernames and passwords
 allowed_chars = set('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_=+')
-
-
-def send_messages(connection):
-    while True:
-        message = input()
-        data = json.dumps({'action': 'send', 'text': message})
-        connection.sendall(data.encode('utf-8'))
 
 
 def check_username(username):
@@ -33,36 +27,84 @@ def check_password(password):
     return True
 
 
-def get_username(new_user):
-    while True:
-        username = input('Username: ')
-        if not new_user or check_username(username):
-            break
-        print('Invalid username. Allowed characters are letters, numbers, -, _, = and +. '
-              'No diacritics are allowed. It cannot be more than 16 characters long')
-    return username
+def limit_size(size, var):
+    def to_return(*args):
+        var.set(var.get()[:size])
+    return to_return
 
 
-def get_password(new_user):
-    while True:
-        password = input('Password: ')
-        if not new_user or check_password(password):
-            break
-        print('Invalid password. Allowed characters are letters, numbers, -, _, = and +. '
-              'No diacritics are allowed. It cannot be more than 32 characters long')
-
+def login(data):
+    username = data['-username-']
+    password = data['-password-']
     password = hashlib.sha256(password.encode('utf-8')).hexdigest()
-    return password
+    s.sendall(json.dumps({'action': 'login',
+                          'username': username,
+                          'password': password}).encode('utf-8'))
+    response = json.loads(s.recv(1024))
+    if not response['ok']:
+        window['error'].update(value=response, visible=True)
 
 
-HOST = 'localhost'
+def register(data):
+    username = data['-username-']
+    if not check_username(username):
+        window['error'].update(value='Invalid username. Allowed characters are letters, numbers, '
+                                     '-, _ , = and +. No diacritics are allowed.', visible=True)
+        return
+
+    password = data['-username-']
+    if not check_password(password):
+        window['error'].update(value='Invalid password. Allowed characters are letters, numbers, -, _ '
+                                     ', = and +. No diacritics are allowed.', visible=True)
+        return
+    password = hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+    s.sendall(json.dumps({'action': 'register',
+                          'username': username,
+                          'password': password}).encode('utf-8'))
+    response = json.loads(s.recv(1024))
+
+    if not response['ok']:
+        window['error'].update(value=response, visible=True)
+    else:
+        login(data)
+
+
+def send_message():
+    message = chat_entry_box.get()
+    chat_entry_box_text.set('')
+    data = json.dumps({'action': 'send', 'text': message})
+    s.sendall(data.encode('utf-8'))
+
+
+HOST = '192.168.2.11'
 PORT = 56789
 
+WIDTH = 750
+HEIGHT = 750
 
-new_user = True if input('Do you have an account (y/n)? ') == 'n' else False
-username = get_username(new_user)
-password = get_password(new_user)
+layout = [[sg.Input(default_text='Username', tooltip='Username', key='-username-')],
+          [sg.Input(default_text='Password', tooltip='Password', key='-password-')],
+          [sg.Button(button_text='Log In', key='login')],
+          [sg.Button(button_text='Register', key='register')],
+          [sg.Text(key='error', visible=False)]]
 
+window = sg.Window('ClientGUI', layout, finalize=True)
+window['error'].Widget.configure(wraplength=200)
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.connect((HOST, PORT))
+    while True:
+        event, values = window.read()
+        if event == sg.WIN_CLOSED:
+            break
+        elif event == 'login':
+            login(values)
+        elif event == 'register':
+            register(values)
+        print(event, values)
+
+exit()
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
 

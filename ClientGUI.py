@@ -27,15 +27,7 @@ def check_password(password):
     return True
 
 
-def limit_size(size, var):
-    def to_return(*args):
-        var.set(var.get()[:size])
-    return to_return
-
-
-def login(data):
-    username = data['-username-']
-    password = data['-password-']
+def login(username, password):
     password = hashlib.sha256(password.encode('utf-8')).hexdigest()
     s.sendall(json.dumps({'action': 'login',
                           'username': username,
@@ -45,14 +37,12 @@ def login(data):
         window['error'].update(value=response, visible=True)
 
 
-def register(data):
-    username = data['-username-']
+def register(username, password):
     if not check_username(username):
         window['error'].update(value='Invalid username. Allowed characters are letters, numbers, '
                                      '-, _ , = and +. No diacritics are allowed.', visible=True)
         return
 
-    password = data['-username-']
     if not check_password(password):
         window['error'].update(value='Invalid password. Allowed characters are letters, numbers, -, _ '
                                      ', = and +. No diacritics are allowed.', visible=True)
@@ -67,84 +57,74 @@ def register(data):
     if not response['ok']:
         window['error'].update(value=response, visible=True)
     else:
-        login(data)
+        login(username, password)
 
 
-def send_message():
-    message = chat_entry_box.get()
-    chat_entry_box_text.set('')
-    data = json.dumps({'action': 'send', 'text': message})
-    s.sendall(data.encode('utf-8'))
+def send_message(data):
+    message = json.dumps({'action': 'send', 'text': data})
+    s.sendall(message.encode('utf-8'))
+
+
+def listen():
+    while True:
+        try:
+            data = s.recv(1024)
+            if not data:
+                raise ConnectionResetError
+        except ConnectionResetError:
+            window['chat'].print('Disconnected')
+            break
+        print(data)
+        received = json.loads(data)
+        if received['action'] == 'send':
+            window['chat'].print(f'{received["user"]}: {received["text"]}')
+        elif received['action'] == 'connection':
+            window['chat'].print(f'{received["user"]} connected')
+        elif received['action'] == 'disconnection':
+            window['chat'].print(f'{received["user"]} disconnected')
 
 
 HOST = '192.168.2.11'
-PORT = 56789
+PORT = 26951
 
 WIDTH = 750
 HEIGHT = 750
 
-layout = [[sg.Input(default_text='Username', tooltip='Username', key='-username-')],
-          [sg.Input(default_text='Password', tooltip='Password', key='-password-')],
-          [sg.Button(button_text='Log In', key='login')],
-          [sg.Button(button_text='Register', key='register')],
-          [sg.Text(key='error', visible=False)]]
+login_layout = [[sg.Input(default_text='Username', tooltip='Username', key='-username-')],
+                [sg.Input(default_text='Password', tooltip='Password', key='-password-')],
+                [sg.Button(button_text='Log In', key='login')],
+                [sg.Button(button_text='Register', key='register')],
+                [sg.Text(key='error', visible=False)]]
+
+chat_layout = [[sg.Multiline(default_text='Connected to server\n', disabled=True,
+                             auto_refresh=True, size=(100, 50), key='chat')],
+               [sg.Input(tooltip='Message', key='-message-', size=(100, None)),
+                sg.Button(button_text='Send', key='send')]]
+
+layout = [[sg.Column(login_layout, key='loginlayout'), sg.Column(chat_layout, key='chatlayout', visible=False)]]
 
 window = sg.Window('ClientGUI', layout, finalize=True)
 window['error'].Widget.configure(wraplength=200)
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
+    listening_thread = threading.Thread(target=listen, daemon=True)
     while True:
         event, values = window.read()
         if event == sg.WIN_CLOSED:
             break
         elif event == 'login':
-            login(values)
+            login(values['-username-'], values['-password-'])
+            window['loginlayout'].update(visible=False)
+            window['chatlayout'].update(visible=True)
+            listening_thread.start()
         elif event == 'register':
-            register(values)
-        print(event, values)
-
-exit()
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.connect((HOST, PORT))
-
-    # Either create a login for a user or log them in
-    if new_user:
-        while True:
-            s.sendall(json.dumps({'action': 'register', 'username': username, 'password': password}).encode('utf-8'))
-            response = json.loads(s.recv(1024))
-            if response['ok']:
-                break
-            if response['reason'] == 1:
-                print('Username is in use. Choose a different one')
-                username = get_username(new_user)
-        s.sendall(json.dumps({'action': 'login', 'username': username, 'password': password}).encode('utf-8'))
-        s.recv(1024)
-    else:
-        while True:
-            s.sendall(json.dumps({'action': 'login', 'username': username, 'password': password}).encode('utf-8'))
-            response = json.loads(s.recv(1024))
-            if response['ok']:
-                break
-            if response['reason'] == 1:
-                print('Incorrect username. Please reenter')
-                username = get_username(new_user)
-            elif response['reason'] == 2:
-                print('Incorrect password. Please reenter')
-                password = get_password(new_user)
-
-    sending_thread = threading.Thread(target=send_messages, args=(s,), daemon=True)
-    sending_thread.start()
-    while True:
-        try:
-            received = s.recv(1024)
-        except ConnectionResetError:
-            print('Connection closed by server')
-            break
-        received = json.loads(received)
-        if received['action'] == 'send':
-            print(f'{received["user"]}: {received["text"]}')
-        elif received['action'] == 'connection':
-            print(f'{received["user"]} connected')
-        elif received['action'] == 'disconnection':
-            print(f'{received["user"]} disconnected')
+            register(values['-username-'], values['-password-'])
+        elif event == 'send':
+            if values['-message-']:
+                send_message(values['-message-'])
+                window['-message-'].update(value='')
+                # window['chat'].print('\n')
+                window['chat'].print(values['-message-'])
+        else:
+            print(event)

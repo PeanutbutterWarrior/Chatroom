@@ -1,9 +1,9 @@
 import socket
 import threading
 import json
-import Commands
+import csv
 
-HOST = 'localhost'
+HOST = '0.0.0.0'
 PORT = 56789
 AUTHENTICATION_PORT = 56788
 
@@ -22,7 +22,6 @@ def manage_client(conn, identity):
                     break
             except BlockingIOError:
                 pass
-
             else:
                 if not data:
                     break
@@ -37,7 +36,7 @@ def manage_client(conn, identity):
                     if data['username'] not in logins:
                         conn.sendall(json.dumps({'ok': False, 'reason': 1}).encode('utf-8'))
 
-                    elif logins[data['username']] != data['password']:
+                    elif logins[data['username']]['password'] != data['password']:
                         conn.sendall(json.dumps({'ok': False, 'reason': 2}).encode('utf-8'))
 
                     else:
@@ -55,7 +54,8 @@ def manage_client(conn, identity):
                     else:
                         conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
                         print(f'{identity} registers as {data["username"]}')
-                        logins[data['username']] = data['password']
+                        logins[data['username']] = {'password': data['password'], 'admin': False}
+                        logins_queue.append((data['username'], data['password'], False))
 
                 elif data['action'] == 'listen':
                     users[identity]['ready'] = True
@@ -63,6 +63,8 @@ def manage_client(conn, identity):
 
                 else:
                     print(f'! Bad action {data} from {identity}')
+    del users[identity]
+    threads.remove(threading.current_thread())
 
 
 def disseminate_message(origin, data):
@@ -82,22 +84,98 @@ def accept_connections():
                 connection, address = s.accept()
             except BlockingIOError:
                 continue
-            identitytity = f'{address[0]}:{address[1]}'
-            print(f'Recieved connection from {identitytity}')
-            client_thread = threading.Thread(target=manage_client, args=(connection, identitytity), daemon=True)
-            users[identitytity] = {'connection': connection, 'thread': client_thread, 'ready': False, 'logged_in': False}
-            threads.append(client_thread)
+            identity = f'{address[0]}:{address[1]}'
+            print(f'Recieved connection from {identity}')
+            client_thread = threading.Thread(target=manage_client,
+                                             args=(connection, identity),
+                                             daemon=True,
+                                             name=identity+'-client'
+                                             )
+            users[identity] = {'connection': connection, 'thread': client_thread, 'ready': False, 'logged_in': False}
+            threads.add(client_thread)
             client_thread.start()
+    threads.remove(threading.current_thread())
 
+
+def write_files():
+    login_file = open('users.csv', 'a', newline='')
+    writer = csv.writer(login_file)
+
+    while running:
+        if len(logins_queue) > 0:
+            login = logins_queue.pop(-1)
+            writer.writerow((login[0], login[1], str(login[2])))
+            print(f'Written {login[0]} to disk')
+            login_file.flush()
+
+    login_file.close()
+    threads.remove(threading.current_thread())
+
+
+# Commands
+
+
+def userinfo(reference, identity):
+    for ip, user in users.items():
+        if reference == 'name' and user['username'] == identity:
+            print(ip, user)
+            break
+        elif reference == 'id' and ip == identity:
+            print(ip, user)
+            break
+    else:
+        print('No user found')
+
+
+def kick(reference, identity, mask='none'):
+    for ip, user in users.items():
+        if reference == 'name' and user['username'] == identity:
+            break
+        elif reference == 'id' and ip == identity:
+            break
+    else:
+        print('No user found')
+        return
+
+    user['connection'].close()
+    if mask == 'none':
+        disseminate_message(ip, {'action': 'kick', 'user': user})
+    elif mask == 'disconnect':
+        disseminate_message(ip, {'action': 'kick', 'user': user})
+
+
+def debug():
+    print(users)
+    print(logins)
+    print(logins_queue)
+    print(threads)
+    print(running)
+
+
+dispatch = {'userinfo': userinfo, 'kick': kick, 'debug': debug}
 
 if __name__ == '__main__':
     users = {}
     logins = {}
-    threads = []
+    logins_queue = []
+    threads = set()
     running = True
 
-    accepting_thread = threading.Thread(target=accept_connections)
-    threads.append(accepting_thread)
+    # Read in logins
+    with open('users.csv', 'r') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            logins[row[0]] = {'password': row[1], 'admin': bool(row[2])}
+
+    # Accepts new connections
+    accepting_thread = threading.Thread(target=accept_connections, name='accepting')
+    threads.add(accepting_thread)
+
+    # Writes data to files from queues
+    file_writing_thread = threading.Thread(target=write_files, name='file_writing')
+    threads.add(file_writing_thread)
+
+    file_writing_thread.start()
     accepting_thread.start()
 
     while running:
@@ -106,10 +184,14 @@ if __name__ == '__main__':
             running = False
         else:
             try:
-                Commands.dispatch[command](users, *args)
+                dispatch[command](*args)
             except KeyError:
                 print('Unknown command')
             except TypeError:
                 print('Bad arguments for command')
+            except Exception as error:
+                print('Unknown error')
+                print(error)
 
     accepting_thread.join()
+    file_writing_thread.join()

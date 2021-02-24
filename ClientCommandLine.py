@@ -2,62 +2,36 @@ import socket
 import threading
 import json
 import hashlib
-
-
-# Characters allowed in usernames and passwords
-allowed_chars = set('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_=+')
-
-
-def send_messages(connection):
-    while True:
-        message = input()
-        data = json.dumps({'action': 'send', 'text': message})
-        connection.sendall(data.encode('utf-8'))
-
-
-def check_username(username):
-    if len(username) > 16:
-        return False
-    for char in username:
-        if char not in allowed_chars:
-            return False
-    return True
-
-
-def check_password(password):
-    if len(password) > 32:
-        return False
-    for char in password:
-        if char not in allowed_chars:
-            return False
-    return True
-
-
-def get_username(new_user):
-    while True:
-        username = input('Username: ')
-        if not new_user or check_username(username):
-            break
-        print('Invalid username. Allowed characters are letters, numbers, -, _, = and +. '
-              'No diacritics are allowed. It cannot be more than 16 characters long')
-    return username
-
-
-def get_password(new_user):
-    while True:
-        password = input('Password: ')
-        if not new_user or check_password(password):
-            break
-        print('Invalid password. Allowed characters are letters, numbers, -, _, = and +. '
-              'No diacritics are allowed. It cannot be more than 32 characters long')
-
-    password = hashlib.sha256(password.encode('utf-8')).hexdigest()
-    return password
-
+import ClientCommon as cc
 
 HOST = '192.168.2.11'
-HOST = 'localhost'
 PORT = 26951
+
+
+def send(connection):
+    while True:
+        message = input()
+        cc.send_message(message, connection)
+
+
+def get_username(new_usr):
+    while True:
+        usr = input('Username: ')
+        if (not new_usr) or (failure := cc.check_username(usr)) is True:
+            break
+        else:
+            print(failure)
+    return usr
+
+
+def get_password(new_usr):
+    while True:
+        pswd = input('Password: ')
+        if (not new_usr) or (failure := cc.check_password(pswd)) is True:
+            break
+        else:
+            print(failure)
+    return pswd
 
 
 new_user = True if input('Do you have an account (y/n)? ') == 'n' else False
@@ -70,29 +44,23 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     # Either create a login for a user or log them in
     if new_user:
         while True:
-            s.sendall(json.dumps({'action': 'register', 'username': username, 'password': password}).encode('utf-8'))
-            response = json.loads(s.recv(1024))
-            if response['ok']:
+            response = cc.register(username, password, s)
+            if response is True:
                 break
-            if response['reason'] == 1:
-                print('Username is in use. Choose a different one')
-                username = get_username(new_user)
-        s.sendall(json.dumps({'action': 'login', 'username': username, 'password': password}).encode('utf-8'))
-        s.recv(1024)
+            print(response['reason'])
+            username = get_username(new_user)
+        cc.login(username, password, s)
     else:
         while True:
-            s.sendall(json.dumps({'action': 'login', 'username': username, 'password': password}).encode('utf-8'))
-            response = json.loads(s.recv(1024))
-            if response['ok']:
+            response = cc.login(username, password, s)
+            if response is True:
                 break
-            if response['reason'] == 1:
-                print('Incorrect username. Please reenter')
+            else:
+                print(response)
                 username = get_username(new_user)
-            elif response['reason'] == 2:
-                print('Incorrect password. Please reenter')
                 password = get_password(new_user)
 
-    sending_thread = threading.Thread(target=send_messages, args=(s,), daemon=True)
+    sending_thread = threading.Thread(target=send, args=(s,), daemon=True)
     sending_thread.start()
     while True:
         try:

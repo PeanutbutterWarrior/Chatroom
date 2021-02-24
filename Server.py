@@ -37,11 +37,11 @@ def manage_client(conn, identity):
                                                        'user': users[identity]['username']})
                 elif data['action'] == 'login':
                     if data['username'] not in logins:
-                        conn.sendall(json.dumps({'ok': False, 'reason': 1}).encode('utf-8'))
-
+                        conn.sendall(json.dumps({'ok': False,
+                                                 'reason': 'There is no account with that name'}).encode('utf-8'))
                     elif logins[data['username']]['password'] != data['password']:
-                        conn.sendall(json.dumps({'ok': False, 'reason': 2}).encode('utf-8'))
-
+                        conn.sendall(json.dumps({'ok': False,
+                                                 'reason': 'The password is incorrect'}).encode('utf-8'))
                     else:
                         conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
                         users[identity]['logged_in'] = True
@@ -53,7 +53,8 @@ def manage_client(conn, identity):
 
                 elif data['action'] == 'register':
                     if data['username'] in logins:
-                        conn.sendall(json.dumps({'ok': False, 'reason': 1}).encode('utf-8'))
+                        conn.sendall(json.dumps({'ok': False,
+                                                 'reason': 'That username is already in use'}).encode('utf-8'))
                     else:
                         conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
                         print(f'{identity} registers as {data["username"]}')

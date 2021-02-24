@@ -34,6 +34,7 @@ login_layout = [[sg.Input(default_text='Username', tooltip='Username', key='-use
                 [sg.Input(default_text='Password', tooltip='Password', key='-password-')],
                 [sg.Button(button_text='Log In', key='login')],
                 [sg.Button(button_text='Register', key='register')],
+                [sg.Button(button_text='Listen', key='listen')],
                 [sg.Text(key='error', visible=False, size=(25, None))]]
 
 chat_layout = [[sg.Multiline(default_text='Connected to server\n', disabled=True,
@@ -53,6 +54,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         event, values = window.read()
         if event == sg.WIN_CLOSED:
             break
+        elif event == 'send':
+            if values['-message-']:
+                cc.send_message(values['-message-'], s)
+                window['-message-'].update(value='')
+                window['chat'].print(values['-message-'])
         elif event == 'login':
             logged_in = cc.login(values['-username-'], values['-password-'], s)
             if logged_in is True:
@@ -68,10 +74,9 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 window['register'].update(visible=False)
             else:
                 window['error'].update(value=registered, visible=True)
-        elif event == 'send':
-            if values['-message-']:
-                cc.send_message(values['-message-'], s)
-                window['-message-'].update(value='')
-                window['chat'].print(values['-message-'])
+        elif event == 'listen':
+            cc.listen(s)
+            window['loginlayout'].update(visible=False)
+            window['chatlayout'].update(visible=True)
         else:
             print(event)

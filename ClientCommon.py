@@ -50,3 +50,7 @@ def register(username, password, connection):
         return True
     else:
         return response['reason']
+
+
+def listen(connection):
+    connection.sendall(json.dumps({'action': 'listen'}).encode('utf-8'))

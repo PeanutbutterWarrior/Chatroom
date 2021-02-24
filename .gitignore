@@ -2,4 +2,6 @@
 __pycache__/
 venv/
 token
+# Kept for backward compatability
 users.csv
+users.db

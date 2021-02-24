@@ -1,7 +1,7 @@
 import socket
 import threading
 import json
-import csv
+import sqlite3
 import inspect
 
 HOST = '0.0.0.0'
@@ -10,6 +10,8 @@ PORT = 26951
 
 def manage_client(conn, identity):
     user = users[identity]
+    db = sqlite3.connect('users.db')
+    cursor = db.cursor()
     with conn:
         while True:
             try:
@@ -50,9 +52,10 @@ def manage_client(conn, identity):
                     conn.sendall(encode(action='command-response', text='Bad aruments for command'))
 
             elif data['action'] == 'login':
-                if data['username'] not in logins:
+                if cursor.execute("SELECT * FROM users WHERE username = ?", (data['username'],)).fetchone() is None:
                     conn.sendall(encode(ok=False, reason='There is no account with that name'))
-                elif logins[data['username']]['password'] != data['password']:
+                elif cursor.execute("SELECT password FROM users WHERE username = ?",
+                                    (data['username'],)).fetchone()[0] != data['password']:
                     conn.sendall(encode(ok=False, reason='The password is incorrect'))
                 elif user['logged_in']:
                     conn.sendall(encode(ok=False, reason='You are already logged in'))
@@ -61,18 +64,19 @@ def manage_client(conn, identity):
                     user['logged_in'] = True
                     user['ready'] = True
                     user['username'] = data['username']
-                    user['admin'] = logins[data['username']]['admin']
+                    user['admin'] = bool(cursor.execute("SELECT admin FROM users WHERE username = ?",
+                                                        (data['username'],)).fetchone()[0])
                     print(f'{identity} logged in as {data["username"]}')
                     disseminate_message(identity, {'action': 'connection',
                                                    'user': user['username']})
 
             elif data['action'] == 'register':
-                if data['username'] in logins:
+                if cursor.execute("SELECT * FROM users WHERE username = ?", (data['username'],)).fetchone():
                     conn.sendall(encode(ok=False, reason='That username is already in use'))
                 else:
                     conn.sendall(encode(ok=True))
-                    print(f'{identity} registers as {data["username"]}')
-                    logins[data['username']] = {'password': data['password'], 'admin': False}
+                    print(f'{identity} registers {data["username"]}')
+                    # logins[data['username']] = {'password': data['password'], 'admin': False}
                     logins_queue.append((data['username'], data['password'], False))
 
             elif data['action'] == 'listen':
@@ -87,6 +91,7 @@ def manage_client(conn, identity):
 
             else:
                 print(f'! Bad action {data} from {identity}')
+    db.close()
     threads.remove(threading.current_thread())
 
 
@@ -124,17 +129,17 @@ def accept_connections():
 
 
 def write_files():
-    login_file = open('users.csv', 'a', newline='')
-    writer = csv.writer(login_file)
-
+    db = sqlite3.connect('users.db')
+    cursor = db.cursor()
     while running:
         if len(logins_queue) > 0:
             login = logins_queue.pop(-1)
-            writer.writerow((login[0], login[1], str(login[2])))
+            cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (login[0], login[1], int(login[2])))
             print(f'Written {login[0]} to disk')
-            login_file.flush()
+            db.commit()
 
-    login_file.close()
+    db.commit()
+    db.close()
     threads.remove(threading.current_thread())
 
 
@@ -197,7 +202,6 @@ def debug():
     Usage: /debug
     """
     print(users)
-    print(logins)
     print(logins_queue)
     print(threads)
     print(running)
@@ -245,16 +249,9 @@ admin_command_dispatch.update(standard_command_dispatch)
 
 if __name__ == '__main__':
     users = {}
-    logins = {}
     logins_queue = []
     threads = set()
     running = True
-
-    # Read in logins
-    with open('users.csv', 'r') as file:
-        reader = csv.reader(file)
-        for row in reader:
-            logins[row[0]] = {'password': row[1], 'admin': row[2] == 'True'}
 
     # Accepts new connections
     accepting_thread = threading.Thread(target=accept_connections, name='accepting')

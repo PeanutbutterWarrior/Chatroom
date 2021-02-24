@@ -195,7 +195,7 @@ def promote(reference, identity):
     user['admin'] = True
     print(f'{user["username"]} was promoted')
     disseminate_message(None, {'action': 'promotion', 'user': user['username']})
-    return f'{users["username"]} was promoted'
+    return f'{user["username"]} was promoted'
 
 
 standard_command_dispatch = {}

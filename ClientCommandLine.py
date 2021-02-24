@@ -1,10 +1,9 @@
 import socket
 import threading
 import json
-import hashlib
 import ClientCommon as cc
 
-HOST = '192.168.2.11'
+HOST = 'localhost'
 PORT = 26951
 
 

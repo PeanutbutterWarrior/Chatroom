@@ -4,7 +4,7 @@ import json
 import ClientCommon as cc
 import PySimpleGUI as sg
 
-HOST = '192.168.2.11'
+HOST = 'localhost'
 PORT = 26951
 
 
@@ -17,7 +17,6 @@ def listen(connection):
         except ConnectionResetError:
             window['chat'].print('Disconnected')
             break
-        print(data)
         received = json.loads(data)
         if received['action'] == 'send':
             window['chat'].print(f'{received["user"]}: {received["text"]}')
@@ -62,7 +61,8 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     command, *args = values['-message-'].split(' ')
                     command = command[1:]
                     s.sendall(json.dumps({'action': 'command', 'command': command, 'args': args}).encode('utf-8'))
-                cc.send_message(values['-message-'], s)
+                else:
+                    cc.send_message(values['-message-'], s)
                 window['-message-'].update(value='')
                 window['chat'].print(values['-message-'])
         elif event == 'login':
@@ -76,7 +76,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         elif event == 'register':
             registered = cc.register(values['-username-'], values['-password-'], s)
             if registered is True:
-                cc.login(values['-username-'], values['-password-'], s)
                 window['register'].update(visible=False)
             else:
                 window['error'].update(value=registered, visible=True)

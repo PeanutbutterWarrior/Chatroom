@@ -20,18 +20,13 @@ def manage_client(conn, identity):
             except (ConnectionResetError, OSError):
                 if user['logged_in']:
                     print(f'{user["username"]} disconnected')
-                    disseminate_message(identity, {'action': 'disconnection',
-                                                   'user': user['username']})
-                    del user
+                    disseminate_message(identity, {'action': 'disconnection', 'user': user['username']})
+                    del users[identity]
                     break
                 print(f'{identity} disconnected')
                 break
 
-            try:
-                data = json.loads(data)
-            except:
-                print(data)
-                continue
+            data = json.loads(data)
             if data['action'] == 'send':
                 if user['logged_in']:
                     print(f'{user["username"]}: {data["text"]}')
@@ -42,27 +37,21 @@ def manage_client(conn, identity):
                 cmd = data['command']
                 args = data['args']
                 try:
-                    conn.sendall(admin_command_dispatch[cmd](*args).encode('utf-8'))
+                    conn.sendall(encode(action='command-response', text=admin_command_dispatch[cmd](*args)))
                 except KeyError:
-                    conn.sendall(b'Unknown command')
+                    conn.sendall(encode(action='command-response', text='Unknown command'))
                 except TypeError:
-                    conn.sendall(b'Bad arguments for command')
-                except Exception as error:
-                    print('Unknown error in client')
-                    print(error)
+                    conn.sendall(encode(action='command-response', text='Bad aruments for command'))
 
             elif data['action'] == 'login':
                 if data['username'] not in logins:
-                    conn.sendall(json.dumps({'ok': False,
-                                             'reason': 'There is no account with that name'}).encode('utf-8'))
+                    conn.sendall(encode(ok=False, reason='There is no account with that name'))
                 elif logins[data['username']]['password'] != data['password']:
-                    conn.sendall(json.dumps({'ok': False,
-                                             'reason': 'The password is incorrect'}).encode('utf-8'))
+                    conn.sendall(encode(ok=False, reason='The password is incorrect'))
                 elif user['logged_in']:
-                    conn.sendall(json.dumps({'ok': False,
-                                             'reason': 'You are already logged in'}).encode('utf-8'))
+                    conn.sendall(encode(ok=False, reason='You are already logged in'))
                 else:
-                    conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
+                    conn.sendall(encode(ok=True))
                     user['logged_in'] = True
                     user['ready'] = True
                     user['username'] = data['username']
@@ -73,10 +62,9 @@ def manage_client(conn, identity):
 
             elif data['action'] == 'register':
                 if data['username'] in logins:
-                    conn.sendall(json.dumps({'ok': False,
-                                             'reason': 'That username is already in use'}).encode('utf-8'))
+                    conn.sendall(encode(ok=False, reason='That username is already in use'))
                 else:
-                    conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
+                    conn.sendall(encode(ok=True))
                     print(f'{identity} registers as {data["username"]}')
                     logins[data['username']] = {'password': data['password'], 'admin': False}
                     logins_queue.append((data['username'], data['password'], False))
@@ -142,6 +130,10 @@ def write_files():
 
     login_file.close()
     threads.remove(threading.current_thread())
+
+
+def encode(**kwargs):
+    return json.dumps(kwargs).encode('utf-8')
 
 
 # Commands

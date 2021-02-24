@@ -25,6 +25,8 @@ def listen(connection):
             window['chat'].print(f'{received["user"]} connected')
         elif received['action'] == 'disconnection':
             window['chat'].print(f'{received["user"]} disconnected')
+        elif received['action'] == 'command-response':
+            window['chat'].print(f'{received["text"]}')
 
 
 WIDTH = 750
@@ -56,6 +58,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             break
         elif event == 'send':
             if values['-message-']:
+                if values['-message-'][0] == '/':
+                    command, *args = values['-message-'].split(' ')
+                    command = command[1:]
+                    s.sendall(json.dumps({'action': 'command', 'command': command, 'args': args}).encode('utf-8'))
                 cc.send_message(values['-message-'], s)
                 window['-message-'].update(value='')
                 window['chat'].print(values['-message-'])

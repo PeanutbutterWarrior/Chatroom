@@ -27,7 +27,11 @@ def manage_client(conn, identity):
                 print(f'{identity} disconnected')
                 break
 
-            data = json.loads(data)
+            try:
+                data = json.loads(data)
+            except:
+                print(data)
+                continue
             if data['action'] == 'send':
                 if user['logged_in']:
                     print(f'{user["username"]}: {data["text"]}')
@@ -35,7 +39,17 @@ def manage_client(conn, identity):
                                                    'text': data['text'],
                                                    'user': user['username']})
             elif data['action'] == 'command':
-                pass
+                cmd = data['command']
+                args = data['args']
+                try:
+                    conn.sendall(admin_command_dispatch[cmd](*args).encode('utf-8'))
+                except KeyError:
+                    conn.sendall(b'Unknown command')
+                except TypeError:
+                    conn.sendall(b'Bad arguments for command')
+                except Exception as error:
+                    print('Unknown error in client')
+                    print(error)
 
             elif data['action'] == 'login':
                 if data['username'] not in logins:
@@ -157,7 +171,7 @@ def kick(reference, identity, mask='none'):
     elif mask == 'disconnect':
         disseminate_message(ip, {'action': 'disconnect', 'user': user})
     print(f'{user["username"]} was kicked')
-    return 'User kicked'
+    return f'{user["username"]} was kicked'
 
 
 def debug():
@@ -214,12 +228,12 @@ if __name__ == '__main__':
     accepting_thread.start()
 
     while running:
-        command, *args = input().split()
+        command, *arguments = input().split()
         if command == 'exit':
             running = False
         else:
             try:
-                print(admin_command_dispatch[command](*args))
+                print(admin_command_dispatch[command](*arguments))
             except KeyError:
                 print('Unknown command')
             except TypeError:

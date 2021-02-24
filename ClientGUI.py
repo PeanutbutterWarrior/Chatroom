@@ -32,9 +32,9 @@ HEIGHT = 750
 
 login_layout = [[sg.Input(default_text='Username', tooltip='Username', key='-username-')],
                 [sg.Input(default_text='Password', tooltip='Password', key='-password-')],
-                [sg.Button(button_text='Log In', key='login')],
-                [sg.Button(button_text='Register', key='register')],
-                [sg.Button(button_text='Listen', key='listen')],
+                [sg.Button(button_text='Log In', key='login'),
+                 sg.Button(button_text='Register', key='register'),
+                 sg.Button(button_text='Listen', key='listen')],
                 [sg.Text(key='error', visible=False, size=(25, None))]]
 
 chat_layout = [[sg.Multiline(default_text='Connected to server\n', disabled=True,

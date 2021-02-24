@@ -2,6 +2,7 @@ import socket
 import threading
 import json
 import csv
+import inspect
 
 HOST = '0.0.0.0'
 PORT = 26951
@@ -36,8 +37,13 @@ def manage_client(conn, identity):
             elif data['action'] == 'command':
                 cmd = data['command']
                 args = data['args']
+                if user['admin']:
+                    dispatch_table = admin_command_dispatch
+                else:
+                    dispatch_table = standard_command_dispatch
+
                 try:
-                    conn.sendall(encode(action='command-response', text=admin_command_dispatch[cmd](*args)))
+                    conn.sendall(encode(action='command-response', text=dispatch_table[cmd](*args)))
                 except KeyError:
                     conn.sendall(encode(action='command-response', text='Unknown command'))
                 except TypeError:
@@ -140,6 +146,13 @@ def encode(**kwargs):
 
 
 def userinfo(reference, identity):
+    """
+    Gets information on a user
+    Admin only
+    Usage: /userinfo reference_type identity
+    reference_type: either 'ip' or 'name'
+    identity: the identity of the user, either their name or ip:port
+    """
     for ip, user in users.items():
         if reference == 'name' and user['username'] == identity:
             return f'ip: {ip}, data: {user}'
@@ -149,6 +162,14 @@ def userinfo(reference, identity):
 
 
 def kick(reference, identity, mask='none'):
+    """
+    Kicks a user from the server. Does not stop them reconnecting
+    Admin only
+    Usage: /kick reference identity [mask='none']
+    reference: either 'ip' or 'name'
+    identity: the identity of the user, either their name or ip:port
+    mask: 'none', 'disconnect' or 'hidden'. Hides or changes the kicking
+    """
     for ip, user in users.items():
         if reference == 'name' and user['username'] == identity:
             break
@@ -157,16 +178,24 @@ def kick(reference, identity, mask='none'):
     else:
         return 'No user found'
 
-    user['connection'].close()
     if mask == 'none':
         disseminate_message(ip, {'action': 'kick', 'user': user})
     elif mask == 'disconnect':
         disseminate_message(ip, {'action': 'disconnect', 'user': user})
+    elif mask == 'hidden':
+        pass
+    else:
+        return 'Bad mask argument'
+    user['connection'].close()
     print(f'{user["username"]} was kicked')
     return f'{user["username"]} was kicked'
 
 
 def debug():
+    """
+    Gives debug information. Only prints to the server console
+    Usage: /debug
+    """
     print(users)
     print(logins)
     print(logins_queue)
@@ -175,6 +204,13 @@ def debug():
 
 
 def promote(reference, identity):
+    """
+    Promotes a user to admin#
+    Admin only
+    Usage: /promote reference identity
+    reference: either 'ip' or 'name'
+    identity: the identity of the user, either their name or ip:port
+    """
     for ip, user in users.items():
         if reference == 'name' and user['username'] == identity:
             break
@@ -190,8 +226,20 @@ def promote(reference, identity):
     return f'{user["username"]} was promoted'
 
 
-standard_command_dispatch = {}
-admin_command_dispatch = {'userinfo': userinfo, 'kick': kick, 'debug': debug, 'promote': promote}
+def help_command(command_name):
+    """
+    Gives information on the usage of a command
+    Usage: /help command_name
+    command_name: The name of the command
+    """
+    try:
+        return inspect.getdoc(admin_command_dispatch[command_name])
+    except IndexError:
+        return 'No command with that name'
+
+
+standard_command_dispatch = {'debug': debug, 'help': help_command}
+admin_command_dispatch = {'userinfo': userinfo, 'kick': kick, 'promote': promote}
 # Admins have access to all commands, including standard ones
 admin_command_dispatch.update(standard_command_dispatch)
 

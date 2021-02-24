@@ -8,6 +8,7 @@ PORT = 26951
 
 
 def manage_client(conn, identity):
+    user = users[identity]
     with conn:
         while True:
             try:
@@ -15,58 +16,69 @@ def manage_client(conn, identity):
                 if not data:
                     raise ConnectionResetError
             except BlockingIOError:
-                pass
+                continue
             except (ConnectionResetError, OSError):
-                if users[identity]['logged_in']:
-                    print(f'{users[identity]["username"]} disconnected')
+                if user['logged_in']:
+                    print(f'{user["username"]} disconnected')
                     disseminate_message(identity, {'action': 'disconnection',
-                                                   'user': users[identity]['username']})
-                    del users[identity]
+                                                   'user': user['username']})
+                    del user
                     break
                 print(f'{identity} disconnected')
                 break
-            else:
-                if not data:
-                    break
-                data = json.loads(data)
-                if data['action'] == 'send':
-                    if users[identity]['logged_in']:
-                        print(f'{users[identity]["username"]}: {data["text"]}')
-                        disseminate_message(identity, {'action': 'send',
-                                                       'text': data['text'],
-                                                       'user': users[identity]['username']})
-                elif data['action'] == 'login':
-                    if data['username'] not in logins:
-                        conn.sendall(json.dumps({'ok': False,
-                                                 'reason': 'There is no account with that name'}).encode('utf-8'))
-                    elif logins[data['username']]['password'] != data['password']:
-                        conn.sendall(json.dumps({'ok': False,
-                                                 'reason': 'The password is incorrect'}).encode('utf-8'))
-                    else:
-                        conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
-                        users[identity]['logged_in'] = True
-                        users[identity]['ready'] = True
-                        users[identity]['username'] = data['username']
-                        print(f'{identity} logged in as {data["username"]}')
-                        disseminate_message(identity, {'action': 'connection',
-                                                       'user': users[identity]['username']})
 
-                elif data['action'] == 'register':
-                    if data['username'] in logins:
-                        conn.sendall(json.dumps({'ok': False,
-                                                 'reason': 'That username is already in use'}).encode('utf-8'))
-                    else:
-                        conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
-                        print(f'{identity} registers as {data["username"]}')
-                        logins[data['username']] = {'password': data['password'], 'admin': False}
-                        logins_queue.append((data['username'], data['password'], False))
+            data = json.loads(data)
+            if data['action'] == 'send':
+                if user['logged_in']:
+                    print(f'{user["username"]}: {data["text"]}')
+                    disseminate_message(identity, {'action': 'send',
+                                                   'text': data['text'],
+                                                   'user': user['username']})
+            elif data['action'] == 'command':
+                pass
 
-                elif data['action'] == 'listen':
-                    users[identity]['ready'] = True
-                    print(f'{identity} is now listening')
-
+            elif data['action'] == 'login':
+                if data['username'] not in logins:
+                    conn.sendall(json.dumps({'ok': False,
+                                             'reason': 'There is no account with that name'}).encode('utf-8'))
+                elif logins[data['username']]['password'] != data['password']:
+                    conn.sendall(json.dumps({'ok': False,
+                                             'reason': 'The password is incorrect'}).encode('utf-8'))
+                elif user['logged_in']:
+                    conn.sendall(json.dumps({'ok': False,
+                                             'reason': 'You are already logged in'}).encode('utf-8'))
                 else:
-                    print(f'! Bad action {data} from {identity}')
+                    conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
+                    user['logged_in'] = True
+                    user['ready'] = True
+                    user['username'] = data['username']
+                    user['admin'] = logins[data['username']]['admin']
+                    print(f'{identity} logged in as {data["username"]}')
+                    disseminate_message(identity, {'action': 'connection',
+                                                   'user': user['username']})
+
+            elif data['action'] == 'register':
+                if data['username'] in logins:
+                    conn.sendall(json.dumps({'ok': False,
+                                             'reason': 'That username is already in use'}).encode('utf-8'))
+                else:
+                    conn.sendall(json.dumps({'ok': True}).encode('utf-8'))
+                    print(f'{identity} registers as {data["username"]}')
+                    logins[data['username']] = {'password': data['password'], 'admin': False}
+                    logins_queue.append((data['username'], data['password'], False))
+
+            elif data['action'] == 'listen':
+                user['ready'] = True
+                print(f'{identity} is now listening')
+
+            elif data['action'] == 'logout':
+                disseminate_message(identity, {'action': 'disconnection', 'user': user['username']})
+                user['logged_in'] = False
+                user['ready'] = False
+                del user['username'], user['admin']
+
+            else:
+                print(f'! Bad action {data} from {identity}')
     threads.remove(threading.current_thread())
 
 
@@ -74,7 +86,10 @@ def disseminate_message(origin, data):
     data = json.dumps(data).encode('utf-8')
     for identity, user_data in users.items():
         if identity != origin and user_data['ready']:
-            user_data['connection'].sendall(data)
+            try:
+                user_data['connection'].sendall(data)
+            except OSError:
+                pass
 
 
 def accept_connections():
@@ -121,13 +136,10 @@ def write_files():
 def userinfo(reference, identity):
     for ip, user in users.items():
         if reference == 'name' and user['username'] == identity:
-            print(ip, user)
-            break
+            return f'ip: {ip}, data: {user}'
         elif reference == 'id' and ip == identity:
-            print(ip, user)
-            break
-    else:
-        print('No user found')
+            return f'ip: {ip}, data: {user}'
+    return 'No user found'
 
 
 def kick(reference, identity, mask='none'):
@@ -137,14 +149,15 @@ def kick(reference, identity, mask='none'):
         elif reference == 'id' and ip == identity:
             break
     else:
-        print('No user found')
-        return
+        return 'No user found'
 
     user['connection'].close()
     if mask == 'none':
         disseminate_message(ip, {'action': 'kick', 'user': user})
     elif mask == 'disconnect':
-        disseminate_message(ip, {'action': 'kick', 'user': user})
+        disseminate_message(ip, {'action': 'disconnect', 'user': user})
+    print(f'{user["username"]} was kicked')
+    return 'User kicked'
 
 
 def debug():
@@ -155,7 +168,26 @@ def debug():
     print(running)
 
 
-dispatch = {'userinfo': userinfo, 'kick': kick, 'debug': debug}
+def promote(reference, identity):
+    for ip, user in users.items():
+        if reference == 'name' and user['username'] == identity:
+            break
+        elif reference == 'id' and ip == identity:
+            break
+    else:
+        return 'No user found'
+    if user['admin']:
+        return 'That user is already an admin'
+    user['admin'] = True
+    print(f'{user["username"]} was promoted')
+    disseminate_message(None, {'action': 'promotion', 'user': user['username']})
+    return f'{users["username"]} was promoted'
+
+
+standard_command_dispatch = {}
+admin_command_dispatch = {'userinfo': userinfo, 'kick': kick, 'debug': debug, 'promote': promote}
+# Admins have access to all commands, including standard ones
+admin_command_dispatch.update(standard_command_dispatch)
 
 if __name__ == '__main__':
     users = {}
@@ -168,7 +200,7 @@ if __name__ == '__main__':
     with open('users.csv', 'r') as file:
         reader = csv.reader(file)
         for row in reader:
-            logins[row[0]] = {'password': row[1], 'admin': bool(row[2])}
+            logins[row[0]] = {'password': row[1], 'admin': row[2] == 'True'}
 
     # Accepts new connections
     accepting_thread = threading.Thread(target=accept_connections, name='accepting')
@@ -187,7 +219,7 @@ if __name__ == '__main__':
             running = False
         else:
             try:
-                dispatch[command](*args)
+                print(admin_command_dispatch[command](*args))
             except KeyError:
                 print('Unknown command')
             except TypeError:

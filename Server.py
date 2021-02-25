@@ -3,6 +3,9 @@ import threading
 import json
 import sqlite3
 import inspect
+import rsa
+import secrets
+import hashlib
 
 HOST = '0.0.0.0'
 PORT = 26951
@@ -51,11 +54,22 @@ def manage_client(conn, identity):
                 except TypeError:
                     conn.sendall(encode(action='command-response', text='Bad aruments for command'))
 
+            elif data['action'] == 'get_key':
+                conn.sendall(encode(action='key', n=pub_key.n, e=pub_key.e))
+
             elif data['action'] == 'login':
+                password = bytes.fromhex(data['password'])
+                password = rsa.decrypt(password, priv_key)
+                password = hashlib.sha256(password)
+                cursor.execute("SELECT salt FROM salts WHERE username = ?", (data['username'],))
+                salt = cursor.fetchone()[0]
+                password.update(bytes.fromhex(salt))
+                password = password.hexdigest()
+
                 if cursor.execute("SELECT * FROM users WHERE username = ?", (data['username'],)).fetchone() is None:
                     conn.sendall(encode(ok=False, reason='There is no account with that name'))
                 elif cursor.execute("SELECT password FROM users WHERE username = ?",
-                                    (data['username'],)).fetchone()[0] != data['password']:
+                                    (data['username'],)).fetchone()[0] != password:
                     conn.sendall(encode(ok=False, reason='The password is incorrect'))
                 elif user['logged_in']:
                     conn.sendall(encode(ok=False, reason='You are already logged in'))
@@ -71,13 +85,20 @@ def manage_client(conn, identity):
                                                    'user': user['username']})
 
             elif data['action'] == 'register':
+                password = bytes.fromhex(data['password'])
+                password = rsa.decrypt(password, priv_key)
+                password = hashlib.sha256(password)
+                salt = secrets.token_hex(32)
+                password.update(bytes.fromhex(salt))
+                password = password.hexdigest()
+
                 if cursor.execute("SELECT * FROM users WHERE username = ?", (data['username'],)).fetchone():
                     conn.sendall(encode(ok=False, reason='That username is already in use'))
                 else:
                     conn.sendall(encode(ok=True))
                     print(f'{identity} registers {data["username"]}')
-                    # logins[data['username']] = {'password': data['password'], 'admin': False}
-                    logins_queue.append((data['username'], data['password'], False))
+                    logins_queue.append((data['username'], password, False))
+                    salts_queue.append((data['username'], salt))
 
             elif data['action'] == 'listen':
                 user['ready'] = True
@@ -137,7 +158,10 @@ def write_files():
             cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (login[0], login[1], int(login[2])))
             print(f'Written {login[0]} to disk')
             db.commit()
-
+        if len(salts_queue) > 0:
+            username, salt = salts_queue.pop(-1)
+            cursor.execute("INSERT INTO salts VALUES (?, ?)", (username, salt))
+            db.commit()
     db.commit()
     db.close()
     threads.remove(threading.current_thread())
@@ -250,8 +274,12 @@ admin_command_dispatch.update(standard_command_dispatch)
 if __name__ == '__main__':
     users = {}
     logins_queue = []
+    salts_queue = []
     threads = set()
     running = True
+
+    # Create RSA keys
+    pub_key, priv_key = rsa.newkeys(512)
 
     # Accepts new connections
     accepting_thread = threading.Thread(target=accept_connections, name='accepting')

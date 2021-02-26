@@ -1,129 +1,162 @@
-import socket
-import threading
-import json
-import sqlite3
+import hashlib
 import inspect
+import json
 import rsa
 import secrets
-import hashlib
+import socket
+import sqlite3
+import threading
 
 HOST = '0.0.0.0'
 PORT = 26951
 
 
-def manage_client(conn, identity):
-    user = users[identity]
-    db = sqlite3.connect('users.db')
-    cursor = db.cursor()
-    with conn:
-        while True:
-            try:
-                data = conn.recv(1024)
-                if not data:
-                    raise ConnectionResetError
-            except BlockingIOError:
-                continue
-            except (ConnectionResetError, OSError):
-                if user['logged_in']:
-                    print(f'{user["username"]} disconnected')
-                    disseminate_message(identity, {'action': 'disconnection', 'user': user['username']})
-                    del users[identity]
-                    break
-                print(f'{identity} disconnected')
-                break
+class Client:
+    db = sqlite3.connect('users.db', check_same_thread=False)
 
-            data = json.loads(data)
-            if data['action'] == 'send':
-                if user['logged_in']:
-                    print(f'{user["username"]}: {data["text"]}')
-                    disseminate_message(identity, {'action': 'send',
-                                                   'text': data['text'],
-                                                   'user': user['username']})
-            elif data['action'] == 'command':
-                cmd = data['command']
-                args = data['args']
-                if user['admin']:
-                    dispatch_table = admin_command_dispatch
-                else:
-                    dispatch_table = standard_command_dispatch
+    def __init__(self, connection, identity):
+        self.connection = connection
+        self.identity = identity
+        self.name = None
+        self.cursor = self.db.cursor()
+        self.logged_in = False
+        self.receiving = False
+        self.admin = False
+        self.dispatch = {'send': self.receive, 'command': self.command, 'get_key': self.get_key, 'listen': self.listen,
+                         'logout': self.logout, 'login': self.login, 'register': self.register}
 
+    def run(self):
+        with self.connection:
+            while True:
                 try:
-                    conn.sendall(encode(action='command-response', text=dispatch_table[cmd](*args)))
-                except KeyError:
-                    conn.sendall(encode(action='command-response', text='Unknown command'))
-                except TypeError:
-                    conn.sendall(encode(action='command-response', text='Bad aruments for command'))
+                    data = self.connection.recv(1024)
+                    if not data:
+                        raise ConnectionResetError
+                except BlockingIOError:
+                    continue
+                except ConnectionResetError:
+                    print(f'{str(self)} disconnected')
+                    break
 
-            elif data['action'] == 'get_key':
-                conn.sendall(encode(action='key', n=pub_key.n, e=pub_key.e))
+                data = json.loads(data)
+                self.dispatch[data['action']](data)
+        self.cursor.close()
+        users.remove(self)
 
-            elif data['action'] == 'login':
-                password = bytes.fromhex(data['password'])
-                password = rsa.decrypt(password, priv_key)
-                password = hashlib.sha256(password)
-                cursor.execute("SELECT salt FROM salts WHERE username = ?", (data['username'],))
-                salt = cursor.fetchone()[0]
-                password.update(bytes.fromhex(salt))
-                password = password.hexdigest()
+    # Message actions
 
-                if cursor.execute("SELECT * FROM users WHERE username = ?", (data['username'],)).fetchone() is None:
-                    conn.sendall(encode(ok=False, reason='There is no account with that name'))
-                elif cursor.execute("SELECT password FROM users WHERE username = ?",
-                                    (data['username'],)).fetchone()[0] != password:
-                    conn.sendall(encode(ok=False, reason='The password is incorrect'))
-                elif user['logged_in']:
-                    conn.sendall(encode(ok=False, reason='You are already logged in'))
-                else:
-                    conn.sendall(encode(ok=True))
-                    user['logged_in'] = True
-                    user['ready'] = True
-                    user['username'] = data['username']
-                    user['admin'] = bool(cursor.execute("SELECT admin FROM users WHERE username = ?",
-                                                        (data['username'],)).fetchone()[0])
-                    print(f'{identity} logged in as {data["username"]}')
-                    disseminate_message(identity, {'action': 'connection',
-                                                   'user': user['username']})
+    def receive(self, data):
+        if self.logged_in:
+            disseminate_message(self, action='send', text=data['text'], user=str(self))
 
-            elif data['action'] == 'register':
-                password = bytes.fromhex(data['password'])
-                password = rsa.decrypt(password, priv_key)
-                password = hashlib.sha256(password)
-                salt = secrets.token_hex(32)
-                password.update(bytes.fromhex(salt))
-                password = password.hexdigest()
+    def command(self, data):
+        if self.admin:
+            dispatch = admin_command_dispatch
+        else:
+            dispatch = standard_command_dispatch
 
-                if cursor.execute("SELECT * FROM users WHERE username = ?", (data['username'],)).fetchone():
-                    conn.sendall(encode(ok=False, reason='That username is already in use'))
-                else:
-                    conn.sendall(encode(ok=True))
-                    print(f'{identity} registers {data["username"]}')
-                    logins_queue.append((data['username'], password, False))
-                    salts_queue.append((data['username'], salt))
+        try:
+            self.send(action='command-response', text=dispatch[data['command']](*data['args']))
+            print(f'{str(self)} ran command {data["command"]} with args {data["args"]}')
+        except KeyError:
+            self.send(action='command-response', text='Unknown command')
+        except TypeError:
+            self.send(action='command-response', text='Bad arguments for command')
 
-            elif data['action'] == 'listen':
-                user['ready'] = True
-                print(f'{identity} is now listening')
+    def get_key(self, data):
+        self.send(action='key', n=pub_key.n, e=pub_key.e, force_send=True)
 
-            elif data['action'] == 'logout':
-                disseminate_message(identity, {'action': 'disconnection', 'user': user['username']})
-                user['logged_in'] = False
-                user['ready'] = False
-                del user['username'], user['admin']
+    def listen(self, data):
+        self.receiving = True
+        print(f'{str(self)} is now listening')
 
-            else:
-                print(f'! Bad action {data} from {identity}')
-    db.close()
-    threads.remove(threading.current_thread())
+    def logout(self, data):
+        disseminate_message(self, action='disconnection', user=str(self))
+        self.logged_in = False
+        self.receiving = False
+        self.admin = False
+        self.name = None
+
+    def login(self, data):
+        username = data['username']
+        while len(new_logins_queue) > 0:
+            pass
+        if self.cursor.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone() is None:
+            self.send(ok=False, reason='There is no account with that name', force_send=True)
+            return
+
+        password = self.hash_password(data['password'])
+        while len(new_salts_queue) > 0:
+            pass
+        self.cursor.execute('SELECT salt FROM salts WHERE username = ?', (username,))
+        salt = self.cursor.fetchone()[0]
+        password.update(bytes.fromhex(salt))
+        password = password.hexdigest()
+        if self.cursor.execute("SELECT password FROM users WHERE username = ?", (username,)).fetchone()[0] != password:
+            self.send(ok=False, reason='The password is incorrect', force_send=True)
+        elif self.logged_in:
+            self.send(ok=False, reason='You are already logged in', force_send=True)
+        else:
+            self.send(ok=True, force_send=True)
+            self.logged_in = True
+            self.receiving = True
+            self.name = username
+            self.admin = bool(self.cursor.execute("SELECT admin FROM users WHERE username = ?", (username,)).fetchone()[0])
+            print(f'{self.identity} logged in as {username}')
+            disseminate_message(self, action='connection', user=str(self))
+
+    def register(self, data):
+        username = data['username']
+
+        if self.cursor.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone():
+            self.send(ok=False, reason='That username is already in use', force_send=True)
+        else:
+            password = self.hash_password(data['password'])
+            salt = secrets.token_hex(32)
+            password.update(bytes.fromhex(salt))
+            password = password.hexdigest()
+            self.send(ok=True, force_send=True)
+            print(f'New user {username}')
+            new_logins_queue.append((username, password, 0))
+            new_salts_queue.append((username, salt))
+
+    # Helper methods
+
+    def send(self, force_send=False, **kwargs):
+        if self.receiving or force_send:
+            self.connection.sendall(json.dumps(kwargs).encode('utf-8'))
+
+    def send_raw(self, message):
+        if self.receiving:
+            self.connection.sendall(message)
+
+    @staticmethod
+    def hash_password(password):
+        password = bytes.fromhex(password)
+        password = rsa.decrypt(password, priv_key)
+        return hashlib.sha256(password)
+
+    # Magic methods
+
+    def __eq__(self, other):
+        if type(other) == str:
+            return self.identity == other or self.name == other
+        elif type(other) == Client:
+            return self.identity == other.identity
+        return False
+
+    def __str__(self):
+        if self.logged_in:
+            return self.name
+        else:
+            return self.identity
 
 
-def disseminate_message(origin, data):
-    data = json.dumps(data).encode('utf-8')
-    for identity, user_data in users.items():
-        if identity != origin and user_data['ready']:
-            try:
-                user_data['connection'].sendall(data)
-            except OSError:
-                pass
+def disseminate_message(origin, **kwargs):
+    message = json.dumps(kwargs).encode('utf-8')
+    for user in users:
+        if user != origin:
+            user.send_raw(message)
 
 
 def accept_connections():
@@ -133,91 +166,75 @@ def accept_connections():
         s.listen()
         while running:
             try:
-                connection, address = s.accept()
+                conn, address = s.accept()
             except BlockingIOError:
                 continue
+
             identity = f'{address[0]}:{address[1]}'
-            print(f'Recieved connection from {identity}')
-            client_thread = threading.Thread(target=manage_client,
-                                             args=(connection, identity),
-                                             daemon=True,
-                                             name=identity+'-client'
-                                             )
-            users[identity] = {'connection': connection, 'thread': client_thread, 'ready': False, 'logged_in': False}
-            threads.add(client_thread)
+            print(f'Received connection from {identity}')
+            client = Client(conn, identity)
+            users.append(client)
+            client_thread = threading.Thread(target=client.run, daemon=True, name=identity+'-client')
             client_thread.start()
-    threads.remove(threading.current_thread())
 
 
 def write_files():
     db = sqlite3.connect('users.db')
     cursor = db.cursor()
     while running:
-        if len(logins_queue) > 0:
-            login = logins_queue.pop(-1)
-            cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (login[0], login[1], int(login[2])))
-            print(f'Written {login[0]} to disk')
+        if len(new_logins_queue) > 0:
+            cursor.executemany('INSERT INTO users VALUES (?, ?, ?)', new_logins_queue)
+            print(f'Written {len(new_logins_queue)} new users to disk')
             db.commit()
-        if len(salts_queue) > 0:
-            username, salt = salts_queue.pop(-1)
-            cursor.execute("INSERT INTO salts VALUES (?, ?)", (username, salt))
+            new_logins_queue.clear()
+        if len(new_salts_queue) > 0:
+            cursor.executemany('INSERT INTO salts VALUES (?, ?)', new_salts_queue)
+            print(f'Written {len(new_salts_queue)} new salts to disk')
             db.commit()
+            new_salts_queue.clear()
     db.commit()
     db.close()
-    threads.remove(threading.current_thread())
-
-
-def encode(**kwargs):
-    return json.dumps(kwargs).encode('utf-8')
 
 
 # Commands
 
 
-def userinfo(reference, identity):
+def userinfo(identity):
     """
     Gets information on a user
     Admin only
-    Usage: /userinfo reference_type identity
-    reference_type: either 'ip' or 'name'
+    Usage: /userinfo identity
     identity: the identity of the user, either their name or ip:port
     """
-    for ip, user in users.items():
-        if reference == 'name' and user['username'] == identity:
-            return f'ip: {ip}, data: {user}'
-        elif reference == 'id' and ip == identity:
-            return f'ip: {ip}, data: {user}'
+    for user in users:
+        if user == identity:
+            return str(user)
     return 'No user found'
 
 
-def kick(reference, identity, mask='none'):
+def kick(identity, mask='none'):
     """
     Kicks a user from the server. Does not stop them reconnecting
     Admin only
-    Usage: /kick reference identity [mask='none']
-    reference: either 'ip' or 'name'
+    Usage: /kick identity [mask='none']
     identity: the identity of the user, either their name or ip:port
     mask: 'none', 'disconnect' or 'hidden'. Hides or changes the kicking
     """
-    for ip, user in users.items():
-        if reference == 'name' and user['username'] == identity:
-            break
-        elif reference == 'id' and ip == identity:
-            break
-    else:
-        return 'No user found'
-
-    if mask == 'none':
-        disseminate_message(ip, {'action': 'kick', 'user': user})
-    elif mask == 'disconnect':
-        disseminate_message(ip, {'action': 'disconnect', 'user': user})
-    elif mask == 'hidden':
-        pass
-    else:
-        return 'Bad mask argument'
-    user['connection'].close()
-    print(f'{user["username"]} was kicked')
-    return f'{user["username"]} was kicked'
+    for user in users:
+        if user == identity:
+            if mask == 'None':
+                disseminate_message(identity, action='kick', user=str(user))
+            elif mask == 'disconnect':
+                disseminate_message(identity,  action='disconnect', user=str(user))
+            elif mask == 'hidden':
+                pass
+            else:
+                raise TypeError  # Gets caught at calling of command
+            user.send(action='send', text='You have been kicked', user='[Server]')
+            print(f'{str(user)} was kicked')
+            user.connection.close()
+            return f'{str(user)} was kicked'
+    return 'No user found'
 
 
 def debug():
@@ -226,32 +243,28 @@ def debug():
     Usage: /debug
     """
     print(users)
-    print(logins_queue)
-    print(threads)
+    print(new_logins_queue)
+    print(new_salts_queue)
     print(running)
 
 
-def promote(reference, identity):
+def promote(identity):
     """
     Promotes a user to admin#
     Admin only
-    Usage: /promote reference identity
-    reference: either 'ip' or 'name'
+    Usage: /promote identity
     identity: the identity of the user, either their name or ip:port
     """
-    for ip, user in users.items():
-        if reference == 'name' and user['username'] == identity:
-            break
-        elif reference == 'id' and ip == identity:
-            break
-    else:
-        return 'No user found'
-    if user['admin']:
-        return 'That user is already an admin'
-    user['admin'] = True
-    print(f'{user["username"]} was promoted')
-    disseminate_message(None, {'action': 'promotion', 'user': user['username']})
-    return f'{user["username"]} was promoted'
+    for user in users:
+        if user == identity:
+            if user.admin:
+                return 'That user is already an admin'
+            user.admin = True
+            # TODO Update db, maybe in client class
+            print(f'{user["username"]} was promoted')
+            disseminate_message(None, action='promotion', user=str(user))
+            return f'{user["username"]} was promoted'
+    return 'No user found'
 
 
 def help_command(command_name):
@@ -271,11 +284,11 @@ admin_command_dispatch = {'userinfo': userinfo, 'kick': kick, 'promote': promote
 # Admins have access to all commands, including standard ones
 admin_command_dispatch.update(standard_command_dispatch)
 
+
 if __name__ == '__main__':
-    users = {}
-    logins_queue = []
-    salts_queue = []
-    threads = set()
+    users = []
+    new_logins_queue = []
+    new_salts_queue = []
     running = True
 
     # Create RSA keys
@@ -283,29 +296,12 @@ if __name__ == '__main__':
 
     # Accepts new connections
     accepting_thread = threading.Thread(target=accept_connections, name='accepting')
-    threads.add(accepting_thread)
 
     # Writes data to files from queues
     file_writing_thread = threading.Thread(target=write_files, name='file_writing')
-    threads.add(file_writing_thread)
 
     file_writing_thread.start()
     accepting_thread.start()
 
     while running:
-        command, *arguments = input().split()
-        if command == 'exit':
-            running = False
-        else:
-            try:
-                print(admin_command_dispatch[command](*arguments))
-            except KeyError:
-                print('Unknown command')
-            except TypeError:
-                print('Bad arguments for command')
-            except Exception as error:
-                print('Unknown error')
-                print(error)
-
-    accepting_thread.join()
-    file_writing_thread.join()
+        pass

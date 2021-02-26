@@ -36,6 +36,8 @@ class Client:
                     continue
                 except ConnectionResetError:
                     print(f'{str(self)} disconnected')
+                    if self.logged_in:
+                        disseminate_message(self, action='disconnection', user=str(self))
                     break
 
                 data = json.loads(data)
@@ -124,11 +126,17 @@ class Client:
 
     def send(self, force_send=False, **kwargs):
         if self.receiving or force_send:
-            self.connection.sendall(json.dumps(kwargs).encode('utf-8'))
+            try:
+                self.connection.sendall(json.dumps(kwargs).encode('utf-8'))
+            except OSError:
+                pass
 
-    def send_raw(self, message):
-        if self.receiving:
-            self.connection.sendall(message)
+    def send_raw(self, message, force_send=False):
+        if self.receiving or force_send:
+            try:
+                self.connection.sendall(message)
+            except OSError:
+                pass
 
     @staticmethod
     def hash_password(password):
@@ -222,7 +230,7 @@ def kick(identity, mask='none'):
     """
     for user in users:
         if user == identity:
-            if mask == 'None':
+            if mask == 'none':
                 disseminate_message(identity, action='kick', user=str(user))
             elif mask == 'disconnect':
                 disseminate_message(identity,  action='disconnect', user=str(user))
@@ -261,9 +269,9 @@ def promote(identity):
                 return 'That user is already an admin'
             user.admin = True
             # TODO Update db, maybe in client class
-            print(f'{user["username"]} was promoted')
+            print(f'{str(user)} was promoted')
             disseminate_message(None, action='promotion', user=str(user))
-            return f'{user["username"]} was promoted'
+            return f'{str(user)} was promoted'
     return 'No user found'
 
 
@@ -304,4 +312,8 @@ if __name__ == '__main__':
     accepting_thread.start()
 
     while running:
-        pass
+        command, *args = input().split()
+        if command == 'exit':
+            running = False
+        else:
+            print(admin_command_dispatch[command](*args))

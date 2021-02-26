@@ -25,7 +25,11 @@ def listen(connection):
         elif received['action'] == 'disconnection':
             window['chat'].print(f'{received["user"]} disconnected')
         elif received['action'] == 'command-response':
-            window['chat'].print(f'{received["text"]}')
+            window['chat'].print(received["text"])
+        elif received['action'] == 'kick':
+            window['chat'].print(f'{received["user"]} was kicked')
+        elif received['action'] == 'promotion':
+            window['chat'].print(f'{received["user"]} was promoted')
 
 
 WIDTH = 750

@@ -83,7 +83,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 window['error'].update(value=password_ok, visible=True)
             
             username = values['-username-']
-            password = cc.encrypt_password(values['-password-'])
+            password = cc.encrypt_password(values['-password-'], s)
             cc.send(s, action='login', username=username, password=password)
             
             response = cc.receive(s)
@@ -105,7 +105,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 window['error'].update(value=password_ok, visible=True)
 
             username = values['-username-']
-            password = cc.encrypt_password(values['-password-'])
+            password = cc.encrypt_password(values['-password-'], s)
             cc.send(s, action='register', username=username, password=password)
             
             response = cc.receive(s)

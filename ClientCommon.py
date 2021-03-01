@@ -27,15 +27,14 @@ def check_password(password):
     return True
 
 
-def get_rsa_key():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        send(sock, action='get_key')
-        key = receive(sock)
+def get_rsa_key(connection):
+    send(connection, action='get_key')
+    key = receive(connection)
     return rsa.PublicKey(n=key['n'], e=key['e'])
 
 
-def encrypt_password(password):
-    return rsa.encrypt(password.encode('utf-8'), get_rsa_key()).hex()
+def encrypt_password(password, connection):
+    return rsa.encrypt(password.encode('utf-8'), get_rsa_key(connection)).hex()
 
 
 def receive(connection):
@@ -48,7 +47,7 @@ def receive(connection):
             raise ConnectionResetError
         bytes_received += len(data)
         message_chunks.append(data)
-    return json.loads(b''.join(message_chunks).decode('utf-8'))
+    return json.loads(b''.join(message_chunks))
 
 
 def send(connection, **kwargs):

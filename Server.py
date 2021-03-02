@@ -6,9 +6,50 @@ import secrets
 import socket
 import sqlite3
 import threading
+import select
+import queue
 
 HOST = '0.0.0.0'
-PORT = 26951
+PORT = 26950
+
+MAX_CLIENT_THREADS = 8  # Will spawn this many ClientManagers at most each with a thread, plus two extra threads
+
+
+class ClientManager:
+    def __init__(self):
+        self.clients = []
+        self.thread = None
+        self.running = False
+        self.pending_messages = queue.SimpleQueue()
+
+    def run(self):
+        self.pending_messages = queue.SimpleQueue()
+        while running:
+            if self.clients:
+                ready_to_read, *_ = select.select(self.clients, [], [], 1)
+                for client in ready_to_read:
+                    try:
+                        data = client.receive()
+                    except (ConnectionResetError, OSError):
+                        client.close()
+                        self.clients.remove(client)
+                        print(f'{str(client)} disconnected')
+                    else:
+                        client.dispatch[data['action']](data)
+
+            while not self.pending_messages.empty():
+                try:
+                    message, origin = self.pending_messages.get(block=False)
+                except queue.Empty:
+                    break
+                for client in self.clients:
+                    if client != origin:
+                        client.send(message=message, plain_send=True)
+        for client in self.clients:
+            client.close()
+
+    def add_client(self, client):
+        self.clients.append(client)
 
 
 class Client:
@@ -22,32 +63,44 @@ class Client:
         self.logged_in = False
         self.receiving = False
         self.admin = False
-        self.dispatch = {'send': self.receive, 'command': self.command, 'get_key': self.get_key, 'listen': self.listen,
-                         'logout': self.logout, 'login': self.login, 'register': self.register}
+        self.dispatch = {'message': self.message, 'command': self.command, 'get_key': self.get_key,
+                         'listen': self.listen, 'logout': self.logout, 'login': self.login, 'register': self.register}
 
-    def run(self):
-        with self.connection:
-            while True:
-                try:
-                    data = self.connection.recv(1024)
-                    if not data:
-                        raise ConnectionResetError
-                except BlockingIOError:
-                    continue
-                except ConnectionResetError:
-                    print(f'{str(self)} disconnected')
-                    if self.logged_in:
-                        disseminate_message(self, action='disconnection', user=str(self))
-                    break
+    def send(self, force_send=False, plain_send=False, **kwargs):
+        if plain_send:
+            message = kwargs['message']
+        else:
+            message = json.dumps(kwargs).encode('utf-8')
 
-                data = json.loads(data)
-                self.dispatch[data['action']](data)
+        if self.receiving or force_send:
+            message_size = len(message)
+            self.connection.send(str(message_size).zfill(5).encode('utf-8'))
+            bytes_sent = 0
+            while bytes_sent < message_size:
+                bytes_sent += self.connection.send(message[bytes_sent:])
+
+    def receive(self):
+        message_size = self.connection.recv(5)
+        if not message_size:
+            raise ConnectionResetError
+        message_size = int(message_size)
+        message_chunks = []
+        bytes_received = 0
+        while bytes_received < message_size:
+            data = self.connection.recv(1024)
+            if not data:
+                raise ConnectionResetError
+            bytes_received += len(data)
+            message_chunks.append(data)
+        return json.loads(b''.join(message_chunks))
+
+    def close(self):
+        self.connection.close()
         self.cursor.close()
-        users.remove(self)
 
     # Message actions
 
-    def receive(self, data):
+    def message(self, data):
         if self.logged_in:
             disseminate_message(self, action='send', text=data['text'], user=str(self))
 
@@ -81,15 +134,11 @@ class Client:
 
     def login(self, data):
         username = data['username']
-        while len(new_logins_queue) > 0:
-            pass
         if self.cursor.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone() is None:
             self.send(ok=False, reason='There is no account with that name', force_send=True)
             return
 
         password = self.hash_password(data['password'])
-        while len(new_salts_queue) > 0:
-            pass
         self.cursor.execute('SELECT salt FROM salts WHERE username = ?', (username,))
         salt = self.cursor.fetchone()[0]
         password.update(bytes.fromhex(salt))
@@ -122,29 +171,15 @@ class Client:
             new_logins_queue.append((username, password, 0))
             new_salts_queue.append((username, salt))
 
-    # Helper methods
-
-    def send(self, force_send=False, **kwargs):
-        if self.receiving or force_send:
-            try:
-                self.connection.sendall(json.dumps(kwargs).encode('utf-8'))
-            except OSError:
-                pass
-
-    def send_raw(self, message, force_send=False):
-        if self.receiving or force_send:
-            try:
-                self.connection.sendall(message)
-            except OSError:
-                pass
-
     @staticmethod
     def hash_password(password):
         password = bytes.fromhex(password)
         password = rsa.decrypt(password, priv_key)
         return hashlib.sha256(password)
 
-    # Magic methods
+    # Makes Clients work with select.select
+    def fileno(self):
+        return self.connection.fileno()
 
     def __eq__(self, other):
         if type(other) == str:
@@ -159,15 +194,19 @@ class Client:
         else:
             return self.identity
 
+    def __del__(self):
+        self.connection.close()
+        self.cursor.close()
+
 
 def disseminate_message(origin, **kwargs):
     message = json.dumps(kwargs).encode('utf-8')
-    for user in users:
-        if user != origin:
-            user.send_raw(message)
+    for client_manager in client_managers:
+        client_manager.pending_messages.put((message, origin), block=False)
 
 
 def accept_connections():
+    client_manager_index = 0
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((HOST, PORT))
         s.setblocking(False)
@@ -181,9 +220,14 @@ def accept_connections():
             identity = f'{address[0]}:{address[1]}'
             print(f'Received connection from {identity}')
             client = Client(conn, identity)
-            users.append(client)
-            client_thread = threading.Thread(target=client.run, daemon=True, name=identity+'-client')
-            client_thread.start()
+
+            client_managers[client_manager_index].add_client(client)
+            if not client_managers[client_manager_index].running:
+                client_managers[client_manager_index].thread.start()
+
+            client_manager_index += 1
+            if client_manager_index >= MAX_CLIENT_THREADS:
+                client_manager_index = 0
 
 
 def write_files():
@@ -214,9 +258,11 @@ def userinfo(identity):
     Usage: /userinfo identity
     identity: the identity of the user, either their name or ip:port
     """
-    for user in users:
-        if user == identity:
-            return str(user)
+    for client_manager in client_managers:
+        for client in client_manager.clients:
+            if client == identity:
+                return f'Name: {client.name}, Identity: {client.identity}, logged in: {client.logged_in}, ' \
+                       f'receiving: {client.receiving}, admin: {client.admin}'
     return 'No user found'
 
 
@@ -228,50 +274,41 @@ def kick(identity, mask='none'):
     identity: the identity of the user, either their name or ip:port
     mask: 'none', 'disconnect' or 'hidden'. Hides or changes the kicking
     """
-    for user in users:
-        if user == identity:
-            if mask == 'none':
-                disseminate_message(identity, action='kick', user=str(user))
-            elif mask == 'disconnect':
-                disseminate_message(identity,  action='disconnect', user=str(user))
-            elif mask == 'hidden':
-                pass
-            else:
-                raise TypeError  # Gets caught at calling of command
-            user.send(action='send', text='You have been kicked', user='[Server]')
-            print(f'{str(user)} was kicked')
-            user.connection.close()
-            return f'{str(user)} was kicked'
+    for client_manager in client_managers:
+        for client in client_manager.clients:
+            if client == identity:
+                if mask == 'none':
+                    disseminate_message(identity, action='kick', user=str(client))
+                elif mask == 'disconnect':
+                    disseminate_message(identity,  action='disconnect', user=str(client))
+                elif mask == 'hidden':
+                    pass
+                else:
+                    raise TypeError  # Gets caught at calling of command
+                client.send(action='send', text='You have been kicked', user='[Server]')
+                print(f'{str(client)} was kicked')
+                client.connection.close()
+                return f'{str(client)} was kicked'
     return 'No user found'
-
-
-def debug():
-    """
-    Gives debug information. Only prints to the server console
-    Usage: /debug
-    """
-    print(users)
-    print(new_logins_queue)
-    print(new_salts_queue)
-    print(running)
 
 
 def promote(identity):
     """
-    Promotes a user to admin#
+    Promotes a user to admin
     Admin only
     Usage: /promote identity
     identity: the identity of the user, either their name or ip:port
     """
-    for user in users:
-        if user == identity:
-            if user.admin:
-                return 'That user is already an admin'
-            user.admin = True
-            # TODO Update db, maybe in client class
-            print(f'{str(user)} was promoted')
-            disseminate_message(None, action='promotion', user=str(user))
-            return f'{str(user)} was promoted'
+    for client_manager in client_managers:
+        for client in client_manager.clients:
+            if client == identity:
+                if client.admin:
+                    return 'That user is already an admin'
+                client.admin = True
+                # TODO Update db, maybe in client class
+                print(f'{str(client)} was promoted')
+                disseminate_message(None, action='promotion', user=str(client))
+                return f'{str(client)} was promoted'
     return 'No user found'
 
 
@@ -287,17 +324,21 @@ def help_command(command_name):
         return 'No command with that name'
 
 
-standard_command_dispatch = {'debug': debug, 'help': help_command}
+standard_command_dispatch = {'help': help_command}
 admin_command_dispatch = {'userinfo': userinfo, 'kick': kick, 'promote': promote}
 # Admins have access to all commands, including standard ones
 admin_command_dispatch.update(standard_command_dispatch)
 
 
 if __name__ == '__main__':
-    users = []
     new_logins_queue = []
     new_salts_queue = []
     running = True
+
+    client_managers = [ClientManager() for _ in range(MAX_CLIENT_THREADS)]
+    for manager in client_managers:
+        new_thread = threading.Thread(target=manager.run)
+        manager.thread = new_thread
 
     # Create RSA keys
     pub_key, priv_key = rsa.newkeys(512)
@@ -317,3 +358,11 @@ if __name__ == '__main__':
             running = False
         else:
             print(admin_command_dispatch[command](*args))
+
+    accepting_thread.join()
+    file_writing_thread.join()
+    for manager in client_managers:
+        try:
+            manager.thread.join()
+        except RuntimeError:
+            pass

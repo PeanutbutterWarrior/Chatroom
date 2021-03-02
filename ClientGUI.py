@@ -118,3 +118,4 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             cc.send(s, action='listen')
             window['loginlayout'].update(visible=False)
             window['chatlayout'].update(visible=True)
+            listening_thread.start()

@@ -36,7 +36,7 @@ class ClientManager:
                         self.clients.remove(client)
                         print(f'{str(client)} disconnected')
                     else:
-                        client.dispatch[data['action']](data)
+                        getattr(client, data['action'])(data)
 
             while not self.pending_messages.empty():
                 try:

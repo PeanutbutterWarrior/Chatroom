@@ -28,6 +28,8 @@ def listen(connection):
             window['chat'].print(f'{message["user"]} was kicked')
         elif message['action'] == 'promotion':
             window['chat'].print(f'{message["user"]} was promoted')
+        elif message['action'] == 'demotion':
+            window['chat'].print(f'{message["user"]} was demoted')
 
 
 WIDTH = 750
@@ -56,6 +58,7 @@ window['error'].Widget.configure(wraplength=300)
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
+    rsa_key = cc.get_rsa_key(s)
     listening_thread = threading.Thread(target=listen, args=(s,), daemon=True)
     while True:
         event, values = window.read()
@@ -64,12 +67,22 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         elif event == 'send':
             if values['-message-']:
                 if values['-message-'][0] == '/':
+                    window['-message-'].update(value='')
+
                     command, *args = values['-message-'].split(' ')
                     command = command[1:]
+
+                    if command == 'password':
+
+                        window['chat'].print(f'{username}: /password *****')
+                        password = cc.encrypt_password(args[0], rsa_key)
+                        cc.send(s, action='command', command=command, args=(password,))
+                        continue
+
                     cc.send(s, action='command', command=command, args=args)
                 else:
                     cc.send(s, action='message', text=values['-message-'])
-                window['-message-'].update(value='')
+
                 window['chat'].print(f'{username}: {values["-message-"]}')
 
         elif event == 'login':
@@ -83,7 +96,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 window['error'].update(value=password_ok, visible=True)
             
             username = values['-username-']
-            password = cc.encrypt_password(values['-password-'], s)
+            password = cc.encrypt_password(values['-password-'], rsa_key)
             cc.send(s, action='login', username=username, password=password)
             
             response = cc.receive(s)
@@ -105,7 +118,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 window['error'].update(value=password_ok, visible=True)
 
             username = values['-username-']
-            password = cc.encrypt_password(values['-password-'], s)
+            password = cc.encrypt_password(values['-password-'], rsa_key)
             cc.send(s, action='register', username=username, password=password)
             
             response = cc.receive(s)

@@ -33,8 +33,8 @@ def get_rsa_key(connection):
     return rsa.PublicKey(n=key['n'], e=key['e'])
 
 
-def encrypt_password(password, connection):
-    return rsa.encrypt(password.encode('utf-8'), get_rsa_key(connection)).hex()
+def encrypt_password(password, key):
+    return rsa.encrypt(password.encode('utf-8'), key).hex()
 
 
 def receive(connection):

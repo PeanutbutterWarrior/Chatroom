@@ -141,7 +141,8 @@ class Client:
         self.cursor.execute('SELECT salt FROM users WHERE username = ?', (username,))
         salt = self.cursor.fetchone()[0]
         password, _ = hash_password(data['password'], salt=salt)
-        if self.cursor.execute("SELECT password FROM users WHERE username = ?", (username,)).fetchone()[0] != password:
+        known_password = self.cursor.execute("SELECT password FROM users WHERE username = ?", (username,)).fetchone()[0]
+        if not compare_passwords(known_password, password):
             self.send(ok=False, reason='The password is incorrect', force_send=True)
         elif self.logged_in:
             self.send(ok=False, reason='You are already logged in', force_send=True)
@@ -260,6 +261,13 @@ def hash_password(password, salt=None):
     password_hash.update(bytes.fromhex(salt))
     password_hash = password_hash.hexdigest()
     return password_hash, salt
+
+
+def compare_passwords(password1, password2):
+    diff = len(password1) ^ len(password2)
+    for i in range(min(len(password1), len(password2))):
+        diff |= ord(password1[i]) ^ ord(password2[i])
+    return diff == 0
 
 
 # Commands

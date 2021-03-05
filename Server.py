@@ -12,7 +12,8 @@ import queue
 HOST = '0.0.0.0'
 PORT = 26950
 
-MAX_CLIENT_THREADS = 8  # Will spawn this many ClientManagers at most each with a thread, plus two extra threads
+# Will spawn this many ClientManagers at most each with a thread, plus two extra threads, plus the main thread
+MAX_CLIENT_THREADS = 8
 
 
 class ClientManager:
@@ -59,12 +60,11 @@ class Client:
         self.connection = connection
         self.identity = identity
         self.name = None
+        self.color = None
         self.cursor = self.db.cursor()
         self.logged_in = False
         self.receiving = False
         self.admin = False
-        self.dispatch = {'message': self.message, 'command': self.command, 'get_key': self.get_key,
-                         'listen': self.listen, 'logout': self.logout, 'login': self.login, 'register': self.register}
 
     def send(self, force_send=False, plain_send=False, **kwargs):
         if plain_send:
@@ -102,7 +102,7 @@ class Client:
 
     def message(self, data):
         if self.logged_in:
-            disseminate_message(self, action='send', text=data['text'], user=str(self))
+            disseminate_message(self, action='send', text=data['text'], user=str(self), color=self.color)
 
     def command(self, data):
         if self.admin:
@@ -151,6 +151,7 @@ class Client:
             self.receiving = True
             self.name = username
             self.admin = bool(self.cursor.execute("SELECT admin FROM users WHERE username = ?", (username,)).fetchone()[0])
+            self.color = self.cursor.execute("SELECT color FROM users WHERE username = ?", (username,)).fetchone()[0]
             print(f'{self.identity} logged in as {username}')
             disseminate_message(self, action='connection', user=str(self))
 
@@ -164,6 +165,9 @@ class Client:
             self.send(ok=True, force_send=True)
             print(f'New user {username}')
             new_logins_queue.put((username, password, salt), block=False)
+
+    def get_color(self, data):
+        self.send(command='color', color=self.color)
 
     # Makes Clients work with select.select
     def fileno(self):
@@ -385,7 +389,22 @@ def demote(caller, identity):
     return 'No user found'
 
 
-standard_command_dispatch = {'help': help_command, 'username': change_username, 'password': change_password}
+def change_color(caller, new_color):
+    """
+    Changes your text color
+    Usage: /color new_color
+    new_color: Either a name of a color or a hex color code in the format #******
+    """
+    if caller.logged_in:
+        print(f'{caller} changed their color to {new_color}')
+        changed_logins_queue.put(('color', new_color, caller.name))
+        caller.color = new_color
+        return 'You have changed your color'
+    return 'You are not logged in'
+
+
+standard_command_dispatch = {'help': help_command, 'username': change_username, 'password': change_password,
+                             'color': change_color}
 admin_command_dispatch = {'userinfo': userinfo, 'kick': kick, 'promote': promote, 'demote': demote}
 # Admins have access to all commands, including standard ones
 admin_command_dispatch.update(standard_command_dispatch)

@@ -17,7 +17,12 @@ def listen(connection):
 
         # TODO turn this into functions and a dispatch dictionary
         if message['action'] == 'send':
-            window['chat'].print(f'{message["user"]}: {message["text"]}')
+            try:
+                color = message['color']
+            except KeyError:
+                print('no color', message)
+                color = '#000000'
+            window['chat'].print(f'{message["user"]}: {message["text"]}', text_color=color)
         elif message['action'] == 'connection':
             window['chat'].print(f'{message["user"]} connected')
         elif message['action'] == 'disconnection':
@@ -52,6 +57,7 @@ chat_layout = [[sg.Multiline(default_text='Connected to server\n', disabled=True
 layout = [[sg.Column(login_layout, key='loginlayout'), sg.Column(chat_layout, key='chatlayout', visible=False)]]
 
 username = None
+text_color = None
 
 window = sg.Window('ClientGUI', layout, finalize=True)
 window['error'].Widget.configure(wraplength=300)
@@ -74,7 +80,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
                     if command == 'password':
 
-                        window['chat'].print(f'{username}: /password *****')
+                        window['chat'].print(f'{username}: /password *****', text_color=text_color)
                         password = cc.encrypt_password(args[0], rsa_key)
                         cc.send(s, action='command', command=command, args=(password,))
                         continue
@@ -83,7 +89,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 else:
                     cc.send(s, action='message', text=values['-message-'])
 
-                window['chat'].print(f'{username}: {values["-message-"]}')
+                window['chat'].print(f'{username}: {values["-message-"]}', text_color=text_color)
 
         elif event == 'login':
             username_ok = cc.check_username(values['-username-'])
@@ -101,6 +107,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             
             response = cc.receive(s)
             if response['ok']:
+                cc.send(s, action='get_color')
+                data = cc.receive(s)
+                text_color = data['color']
+
                 window['loginlayout'].update(visible=False)
                 window['chatlayout'].update(visible=True)
                 listening_thread.start()

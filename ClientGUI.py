@@ -15,26 +15,8 @@ def listen(connection):
             window['chat'].print('Disconnected')
             break
 
-        # TODO turn this into functions and a dispatch dictionary
-        if message['action'] == 'send':
-            try:
-                color = message['color']
-            except KeyError:
-                print('no color', message)
-                color = '#000000'
-            window['chat'].print(f'{message["user"]}: {message["text"]}', text_color=color)
-        elif message['action'] == 'connection':
-            window['chat'].print(f'{message["user"]} connected')
-        elif message['action'] == 'disconnection':
-            window['chat'].print(f'{message["user"]} disconnected')
-        elif message['action'] == 'command-response':
-            window['chat'].print(message["text"])
-        elif message['action'] == 'kick':
-            window['chat'].print(f'{message["user"]} was kicked')
-        elif message['action'] == 'promotion':
-            window['chat'].print(f'{message["user"]} was promoted')
-        elif message['action'] == 'demotion':
-            window['chat'].print(f'{message["user"]} was demoted')
+        message_color = message.get('color', '#000000')
+        window['chat'].print(cc.message_format_dispatch[message['action']](message), text_color=message_color)
 
 
 WIDTH = 750
@@ -108,8 +90,8 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             response = cc.receive(s)
             if response['ok']:
                 cc.send(s, action='get_color')
-                data = cc.receive(s)
-                text_color = data['color']
+                color = cc.receive(s)
+                text_color = color['color']
 
                 window['loginlayout'].update(visible=False)
                 window['chatlayout'].update(visible=True)

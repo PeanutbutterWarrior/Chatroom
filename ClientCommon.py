@@ -1,11 +1,8 @@
 import json
 import rsa
-import socket
 
 # Characters allowed in usernames and passwords
 allowed_chars = set('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_=+')
-HOST = 'localhost'
-PORT = 26950
 RECEIVE_SIZE = 1024
 
 
@@ -57,3 +54,12 @@ def send(connection, **kwargs):
     bytes_sent = 0
     while bytes_sent < message_size:
         bytes_sent += connection.send(message[bytes_sent:])
+
+
+message_format_dispatch = {'send': lambda data: f'{data["user"]}: {data["text"]}',
+                           'connection': lambda data: f'{data["user"]} connected',
+                           'disconnection': lambda data: f'{data["user"]} disconnected',
+                           'command-response': lambda data: data['text'],
+                           'kick': lambda data: f'{data["user"]} was kicked',
+                           'promotion': lambda data: f'{data["user"]} was promoted',
+                           'demotion': lambda data: f'{data["user"]} was demoted'}

@@ -111,7 +111,7 @@ class Client:
             dispatch = standard_command_dispatch
 
         try:
-            self.send(action='command-response', text=dispatch[data['command']](*data['args']))
+            self.send(action='command-response', text=dispatch[data['command']](self, *data['args']))
             print(f'{str(self)} ran command {data["command"]} with args {data["args"]}')
         except KeyError:
             self.send(action='command-response', text='Unknown command')
@@ -134,12 +134,12 @@ class Client:
 
     def login(self, data):
         username = data['username']
-        if self.cursor.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone() is None:
+        if self.cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone() is None:
             self.send(ok=False, reason='There is no account with that name', force_send=True)
             return
 
         password = self.hash_password(data['password'])
-        self.cursor.execute('SELECT salt FROM salts WHERE username = ?', (username,))
+        self.cursor.execute('SELECT salt FROM users WHERE username = ?', (username,))
         salt = self.cursor.fetchone()[0]
         password.update(bytes.fromhex(salt))
         password = password.hexdigest()
@@ -159,7 +159,7 @@ class Client:
     def register(self, data):
         username = data['username']
 
-        if self.cursor.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone():
+        if self.cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
             self.send(ok=False, reason='That username is already in use', force_send=True)
         else:
             password = self.hash_password(data['password'])
@@ -168,8 +168,7 @@ class Client:
             password = password.hexdigest()
             self.send(ok=True, force_send=True)
             print(f'New user {username}')
-            new_logins_queue.append((username, password, 0))
-            new_salts_queue.append((username, salt))
+            new_logins_queue.put((username, password, salt), block=False)
 
     @staticmethod
     def hash_password(password):
@@ -231,27 +230,39 @@ def accept_connections():
 
 
 def write_files():
-    db = sqlite3.connect('users.db')
+    db = sqlite3.connect('users.db', isolation_level=None)
     cursor = db.cursor()
     while running:
-        if len(new_logins_queue) > 0:
-            cursor.executemany('INSERT INTO users VALUES (?, ?, ?)', new_logins_queue)
-            print(f'Written {len(new_logins_queue)} new users to disk')
-            db.commit()
-            new_logins_queue.clear()
-        if len(new_salts_queue) > 0:
-            cursor.executemany('INSERT INTO salts VALUES (?, ?)', new_salts_queue)
-            print(f'Written {len(new_salts_queue)} new salts to disk')
-            db.commit()
-            new_salts_queue.clear()
+        while not new_logins_queue.empty():
+            try:
+                login = new_logins_queue.get(block=False)
+            except queue.Empty:
+                break
+            cursor.execute('INSERT INTO users (username, password, salt) VALUES (?, ?, ?)', login)
+        while not changed_logins_queue.empty():
+            try:
+                column, *values = changed_logins_queue.get(block=False)
+            except queue.Empty:
+                break
+            column = sanitise_string(column)  # Cannot use usual insertion so must manually sanitise and insert
+            print(column, values)
+            cursor.execute(f'UPDATE users SET {column} = ? WHERE username = ?', values)
     db.commit()
     db.close()
+
+
+def sanitise_string(string):
+    sanitised = []
+    for char in string:
+        if char.isalnum():  # a-z A-Z 0-9
+            sanitised.append(char)
+    return ''.join(sanitised)
 
 
 # Commands
 
 
-def userinfo(identity):
+def userinfo(caller, identity):
     """
     Gets information on a user
     Admin only
@@ -266,7 +277,7 @@ def userinfo(identity):
     return 'No user found'
 
 
-def kick(identity, mask='none'):
+def kick(caller, identity, mask='none'):
     """
     Kicks a user from the server. Does not stop them reconnecting
     Admin only
@@ -292,7 +303,7 @@ def kick(identity, mask='none'):
     return 'No user found'
 
 
-def promote(identity):
+def promote(caller, identity):
     """
     Promotes a user to admin
     Admin only
@@ -305,14 +316,16 @@ def promote(identity):
                 if client.admin:
                     return 'That user is already an admin'
                 client.admin = True
-                # TODO Update db, maybe in client class
+                if client.name is not None:
+                    print('here')
+                    changed_logins_queue.put(('admin', 1, client.name), block=False)
                 print(f'{str(client)} was promoted')
-                disseminate_message(None, action='promotion', user=str(client))
+                disseminate_message(caller, action='promotion', user=str(client))
                 return f'{str(client)} was promoted'
     return 'No user found'
 
 
-def help_command(command_name):
+def help_command(caller, command_name):
     """
     Gives information on the usage of a command
     Usage: /help command_name
@@ -331,8 +344,8 @@ admin_command_dispatch.update(standard_command_dispatch)
 
 
 if __name__ == '__main__':
-    new_logins_queue = []
-    new_salts_queue = []
+    new_logins_queue = queue.Queue()
+    changed_logins_queue = queue.Queue()
     running = True
 
     client_managers = [ClientManager() for _ in range(MAX_CLIENT_THREADS)]
@@ -357,7 +370,7 @@ if __name__ == '__main__':
         if command == 'exit':
             running = False
         else:
-            print(admin_command_dispatch[command](*args))
+            print(admin_command_dispatch[command]('', *args))
 
     accepting_thread.join()
     file_writing_thread.join()

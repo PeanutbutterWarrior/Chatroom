@@ -1,7 +1,7 @@
 import socket
 import threading
-import ClientCommon as cc
 import PySimpleGUI as sg
+import ClientCommon as cc
 
 HOST = 'localhost'
 PORT = 26950
@@ -52,7 +52,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         event, values = window.read()
         if event == sg.WIN_CLOSED:
             break
-        elif event == 'send':
+        if event == 'send':
             if values['-message-']:
                 if values['-message-'][0] == '/':
                     window['-message-'].update(value='')
@@ -65,7 +65,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         password = cc.encrypt_password(args[0], rsa_key)
                         cc.send(s, action='command', command=command, args=(password,))
                         continue
-                    elif command == 'color':
+                    if command == 'color':
                         text_color = args[0]
 
                     cc.send(s, action='command', command=command, args=args)
@@ -79,15 +79,15 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             if username_ok is not True:
                 window['error'].update(value=username_ok, visible=True)
                 continue
-            
+
             password_ok = cc.check_password(values['-password-'])
             if password_ok is not True:
                 window['error'].update(value=password_ok, visible=True)
-            
+
             username = values['-username-']
             password = cc.encrypt_password(values['-password-'], rsa_key)
             cc.send(s, action='login', username=username, password=password)
-            
+
             response = cc.receive(s)
             if response['ok']:
                 cc.send(s, action='get_color')
@@ -99,7 +99,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 listening_thread.start()
             else:
                 window['error'].update(value=response['reason'], visible=True)
-            
+
         elif event == 'register':
             username_ok = cc.check_username(values['-username-'])
             if username_ok is not True:
@@ -113,13 +113,13 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             username = values['-username-']
             password = cc.encrypt_password(values['-password-'], rsa_key)
             cc.send(s, action='register', username=username, password=password)
-            
+
             response = cc.receive(s)
             if response['ok']:
                 window['register'].update(visible=False)
             else:
                 window['error'].update(value=response['reason'], visible=True)
-            
+
         elif event == 'listen':
             cc.send(s, action='listen')
             window['loginlayout'].update(visible=False)

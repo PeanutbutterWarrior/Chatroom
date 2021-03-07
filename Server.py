@@ -1,13 +1,13 @@
 import hashlib
 import inspect
 import json
-import rsa
 import secrets
 import socket
 import sqlite3
 import threading
 import select
 import queue
+import rsa
 
 HOST = '0.0.0.0'
 PORT = 26950
@@ -175,17 +175,16 @@ class Client:
         return self.connection.fileno()
 
     def __eq__(self, other):
-        if type(other) == str:
-            return self.identity == other or self.name == other
-        elif type(other) == Client:
+        if isinstance(other, str):
+            return other in {self.identity, self.name}
+        if isinstance(other, Client):
             return self.identity == other.identity
         return False
 
     def __str__(self):
         if self.logged_in:
             return self.name
-        else:
-            return self.identity
+        return self.identity
 
     def __del__(self):
         self.connection.close()

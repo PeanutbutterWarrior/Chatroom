@@ -22,7 +22,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     listening_thread = threading.Thread(target=listen, daemon=True)
 
     while True:
-        action = input('Do you want to (1) log in or (2) register a new account? ')
+        action = input('Do you want to (1) log in, (2) register a new account or (3) listen to messages? ')
+        if action == '3':
+            cc.send(s, action='listen')
+            break
         username = input('What is your username? ')
         password = input('What is your password? ')
         password = cc.encrypt_password(password, rsa_key)
@@ -40,6 +43,8 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 cc.receive(s)
                 break
             print(response['reason'])
+        else:
+            print('Unknown action. Enter 1, 2 or 3')
 
     listening_thread.start()
 

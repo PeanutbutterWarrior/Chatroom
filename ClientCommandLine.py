@@ -1,78 +1,55 @@
 import socket
 import threading
-import json
 import ClientCommon as cc
 
 HOST = 'localhost'
-PORT = 26951
+PORT = 26950
 
 
-def send(connection):
+def listen():
     while True:
-        message = input()
-        cc.send_message(message, connection)
-
-
-def get_username(new_usr):
-    while True:
-        usr = input('Username: ')
-        if (not new_usr) or (failure := cc.check_username(usr)) is True:
+        try:
+            data = cc.receive(s)
+        except ConnectionResetError:
+            print('Disconnected by server')
             break
-        else:
-            print(failure)
-    return usr
+        print(cc.message_format_dispatch[data['action']](data))
 
-
-def get_password(new_usr):
-    while True:
-        pswd = input('Password: ')
-        if (not new_usr) or (failure := cc.check_password(pswd)) is True:
-            break
-        else:
-            print(failure)
-    return pswd
-
-
-new_user = True if input('Do you have an account (y/n)? ') == 'n' else False
-username = get_username(new_user)
-password = get_password(new_user)
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
+    rsa_key = cc.get_rsa_key(s)
+    listening_thread = threading.Thread(target=listen, daemon=True)
 
-    # Either create a login for a user or log them in
-    if new_user:
-        while True:
-            response = cc.register(username, password, s)
-            if response is True:
+    while True:
+        action = input('Do you want to (1) log in or (2) register a new account? ')
+        username = input('What is your username? ')
+        password = input('What is your password? ')
+        password = cc.encrypt_password(password, rsa_key)
+        if action == '1':
+            cc.send(s, action='login', username=username, password=password)
+            response = cc.receive(s)
+            if response['ok']:
                 break
             print(response['reason'])
-            username = get_username(new_user)
-        cc.login(username, password, s)
-    else:
-        while True:
-            response = cc.login(username, password, s)
-            if response is True:
+        elif action == '2':
+            cc.send(s, action='register', username=username, password=password)
+            response = cc.receive(s)
+            if response['ok']:
+                cc.send(s, action='login', username=username, password=password)
+                cc.receive(s)
                 break
-            else:
-                print(response)
-                username = get_username(new_user)
-                password = get_password(new_user)
+            print(response['reason'])
 
-    sending_thread = threading.Thread(target=send, args=(s,), daemon=True)
-    sending_thread.start()
+    listening_thread.start()
+
     while True:
-        try:
-            received = s.recv(1024)
-            if not received:
-                raise ConnectionResetError
-        except ConnectionResetError:
-            print('Connection closed by server')
-            break
-        received = json.loads(received)
-        if received['action'] == 'send':
-            print(f'{received["user"]}: {received["text"]}')
-        elif received['action'] == 'connection':
-            print(f'{received["user"]} connected')
-        elif received['action'] == 'disconnection':
-            print(f'{received["user"]} disconnected')
+        message = input()
+        if message:
+            if message[0] == '/':
+                command, *args = message.split()
+                if command == '/password':
+                    args = (cc.encrypt_password(args[0], rsa_key), )
+                cc.send(s, action='command', command=command[1:], args=args)
+            else:
+                cc.send(s, action='message', text=message)

@@ -12,7 +12,7 @@ def listen(connection):
         try:
             message = cc.receive(connection)
         except ConnectionResetError:
-            window['chat'].print('Disconnected')
+            window['chat'].print('Disconnected by server')
             break
 
         message_color = message.get('color', '#000000')
@@ -61,11 +61,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     command = command[1:]
 
                     if command == 'password':
-
                         window['chat'].print(f'{username}: /password *****', text_color=text_color)
                         password = cc.encrypt_password(args[0], rsa_key)
                         cc.send(s, action='command', command=command, args=(password,))
                         continue
+                    elif command == 'color':
+                        text_color = args[0]
 
                     cc.send(s, action='command', command=command, args=args)
                 else:
